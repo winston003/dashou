@@ -1,0 +1,51 @@
+{
+  "name": "@warmbyte/dashou",
+  "version": "0.1.0",
+  "description": "让 ChatGPT 安全地读取、修改并执行你授权的本地项目。",
+  "type": "module",
+  "main": "dist/dashou-server.js",
+  "engines": {
+    "node": ">=22.19 <27"
+  },
+  "bin": {
+    "dashou": "dist/dashou-cli.js"
+  },
+  "files": [
+    "dist",
+    "docs/PILOT.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "start": "node dist/dashou-cli.js serve",
+    "test": "tsx src/dashou-config.test.ts && tsx src/dashou-oauth-store.test.ts && tsx src/dashou-workspace.test.ts && tsx src/dashou-tunnel.test.ts && tsx src/dashou-server.test.ts && tsx src/dashou-http.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "chatgpt",
+    "local-files",
+    "dashou"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "express": "^5.2.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "ws": "8.21.0",
+    "undici": "8.5.0"
+  }
+}
