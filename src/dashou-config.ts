@@ -18,6 +18,7 @@ export interface DashouUserConfig {
 export interface DashouAuthFile {
   ownerToken?: string;
   tunnelToken?: string;
+  pilotToken?: string;
 }
 
 export interface DashouConfig {

@@ -12,23 +12,23 @@ export interface RunningCloudflareTunnel {
   close(): Promise<void>;
 }
 
-export function cloudflaredRunSpec(token: string): CloudflaredRunSpec {
+export function cloudflaredRunSpec(token: string, environment: NodeJS.ProcessEnv = process.env): CloudflaredRunSpec {
   const normalized = token.trim();
   if (!normalized) throw new Error("Cloudflare Tunnel token is empty");
 
   return {
-    command: "cloudflared",
+    command: environment.DASHOU_CLOUDFLARED_PATH?.trim() || "cloudflared",
     args: ["tunnel", "--no-autoupdate", "--loglevel", "warn", "run"],
     env: {
-      ...process.env,
+      ...environment,
       TUNNEL_TOKEN: normalized,
     },
   };
 }
 
-export function cloudflaredVersion(): string | undefined {
+export function cloudflaredVersion(environment: NodeJS.ProcessEnv = process.env): string | undefined {
   try {
-    return execFileSync("cloudflared", ["--version"], {
+    return execFileSync(environment.DASHOU_CLOUDFLARED_PATH?.trim() || "cloudflared", ["--version"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();

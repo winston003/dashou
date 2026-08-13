@@ -130,9 +130,10 @@ npm/CLI 的 `cli-latest.json` 是两种格式，不能混用。CLI 清单发布�
 
 如果已经有 Warmbyte 控制面，可配置 `DASHOU_PILOT_POLICY_URL`、临时注入的
 `DASHOU_PILOT_POLICY_TOKEN` 和签名验证用的 `DASHOU_PILOT_POLICY_PUBLIC_KEY`。控制面返回
-短期 signed lease；搭手启动/后台刷新时访问控制面，但健康检查、OAuth 和 access token 校验只做
-本地签名与 expiry 验证，不把控制面放进 MCP 请求热路径。合法 lease 在短暂断网时继续有效，撤销在
-下次刷新或 lease 到期时生效；本机和远端 expiry 取更早者。非 loopback 控制面必须使用 HTTPS。
+短期 signed lease；搭手只在首次激活或没有合法本地 lease 时同步获取，之后由后台刷新；健康检查、OAuth
+和 access token 校验只做本地签名与 expiry 验证，不把控制面放进 MCP 请求热路径。合法 lease 在短暂断网
+或重启时继续有效，撤销在下次刷新或 lease 到期时生效；本机和远端 expiry 取更早者。非 loopback
+控制面必须使用 HTTPS。
 
 本仓库同时提供一个最小的单机控制面：
 `DASHOU_PILOT_CONTROL_ADMIN_TOKEN=... DASHOU_PILOT_CONTROL_LEASE_PRIVATE_KEY=... dashou pilot-control`。

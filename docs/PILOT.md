@@ -109,8 +109,8 @@ export DASHOU_PILOT_POLICY_CACHE_TTL_SECONDS=300
 
 控制面只负责签发和刷新 lease；健康检查、OAuth 和 access token 校验只验证本地缓存的签名 lease。
 合法 lease 支持短时间离线工作；撤销在下一次刷新或 lease 到期时生效。本机和远端 expiry 取更早者。
-非 loopback 的控制面地址必须是 HTTPS。控制面不可达不会让每个 MCP 请求同步等待网络，但首次启动没有合法
-lease 时服务仍不会开放。
+非 loopback 的控制面地址必须是 HTTPS。控制面不可达不会让每个 MCP 请求或已有合法 lease 的重启同步等待
+网络；只有首次激活或本地没有合法 lease 时，服务才会同步尝试获取新 lease。
 
 本仓库还可以启动一个最小单机控制面供首批内测使用：
 

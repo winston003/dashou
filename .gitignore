@@ -5,3 +5,10 @@ releases/
 *.log
 .pilot-private.pem
 .pilot-public.pem
+desktop/vendor/**
+!desktop/vendor/
+!desktop/vendor/**/
+!desktop/vendor/**/.gitkeep
+desktop/dist-ui/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/

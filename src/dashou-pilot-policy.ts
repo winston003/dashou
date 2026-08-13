@@ -160,7 +160,10 @@ export function createPilotAccessGate(
     refresh,
     start(): void {
       if (!remote || refreshTimer) return;
-      void refresh();
+      // A valid cached lease is sufficient for an offline-capable restart.
+      // Refresh it on the normal timer instead of making startup perform
+      // network I/O, even in the background.
+      if (!status().allowed) void refresh();
       refreshTimer = setInterval(() => { void refresh(); }, remote.cacheTtlMs);
       refreshTimer.unref?.();
     },

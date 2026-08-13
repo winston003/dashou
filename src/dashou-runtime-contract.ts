@@ -96,8 +96,11 @@ export function runtimeContractReport(env: NodeJS.ProcessEnv = process.env, runt
   if (!supportedNode(nodeVersion)) issues.push(`Node ${nodeVersion} is outside ${DASHOU_NODE_RANGE}`);
   if (!pathNodeExecutable) issues.push("PATH does not contain an executable node");
   else if (normalizedPath(pathNodeExecutable) !== nodeExecutable) issues.push(`PATH node ${normalizedPath(pathNodeExecutable)} does not match daemon ${nodeExecutable}`);
-  if (!pathNpmExecutable) issues.push("PATH does not contain an executable npm");
-  if (!pathNpxExecutable) issues.push("PATH does not contain an executable npx");
+  // The desktop bundle carries its own Node runtime and deliberately does not
+  // ship npm/npx. CLI installs still require both package managers.
+  const embeddedRuntime = ["1", "true", "yes", "on"].includes((env.DASHOU_EMBEDDED_RUNTIME ?? "").toLowerCase());
+  if (!embeddedRuntime && !pathNpmExecutable) issues.push("PATH does not contain an executable npm");
+  if (!embeddedRuntime && !pathNpxExecutable) issues.push("PATH does not contain an executable npx");
 
   return {
     ok: issues.length === 0,

@@ -101,6 +101,45 @@ test("a valid cached lease keeps the runtime available during a temporary contro
   }
 });
 
+test("a valid cached lease does not make startup wait for the control plane", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "dashou-pilot-startup-"));
+  const now = Date.parse("2026-08-13T00:00:00.000Z");
+  const remote = remoteConfig(stateDir);
+  const lease = signedLease({
+    accountId: "pilot-alice",
+    enabled: true,
+    expiresAt: "2026-08-13T01:00:00.000Z",
+    issuedAt: "2026-08-13T00:00:00.000Z",
+  });
+  try {
+    const first = createPilotAccessGate(undefined, remote, {
+      now: () => now,
+      fetchImpl: async () => new Response(JSON.stringify({ lease }), { status: 200 }),
+    });
+    await first.refresh();
+
+    let calls = 0;
+    const restarted = createPilotAccessGate(undefined, remote, {
+      now: () => now,
+      fetchImpl: async () => {
+        calls += 1;
+        return new Response("offline", { status: 503 });
+      },
+    });
+    restarted.start();
+    assert.deepEqual(restarted.status(), {
+      allowed: true,
+      reason: "enabled",
+      accountId: "pilot-alice",
+      expiresAt: "2026-08-13T01:00:00.000Z",
+    });
+    assert.equal(calls, 0);
+    restarted.stop();
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("local and remote expiry resolve to the earlier time", async () => {
   let now = Date.parse("2026-08-13T00:00:00.000Z");
   const remote = remoteConfig();

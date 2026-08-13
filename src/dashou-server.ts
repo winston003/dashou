@@ -316,11 +316,16 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
   return {
     app,
     config,
-    ready: () => {
-      readyPromise ??= (async () => {
-        const pilot = await pilotGate.refresh();
-        if (!pilot.allowed) throw new Error(`搭手试用不可用：${pilot.reason}`);
-      })();
+      ready: () => {
+        readyPromise ??= (async () => {
+          // A verified cached lease is enough to start during a temporary
+          // control-plane outage. Only first activation or an expired/missing
+          // lease needs a synchronous refresh; normal restarts stay offline-capable.
+          const cached = pilotGate.status();
+          if (cached.allowed) return;
+          const pilot = await pilotGate.refresh();
+          if (!pilot.allowed) throw new Error(`搭手试用不可用：${pilot.reason}`);
+        })();
       return readyPromise;
     },
     close: () => {
