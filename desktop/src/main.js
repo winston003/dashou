@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import "./styles.css";
@@ -9,6 +11,7 @@ const ready = $("ready");
 const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 let updatePromise;
 let refreshPromise;
+let currentMcpUrl;
 
 async function checkAndInstallUpdate({ silent = false } = {}) {
   if (updatePromise) return updatePromise;
@@ -60,6 +63,7 @@ async function refresh() {
     setup.classList.add("hidden");
     ready.classList.remove("hidden");
     $("mcp-url").textContent = actual.mcpUrl || "—";
+    currentMcpUrl = actual.mcpUrl || undefined;
     $("local-health").textContent = actual.localHealth ? "正常" : "不可用";
     $("public-health").textContent = actual.publicHealth ? "正常" : "等待连接";
     $("proxy").textContent = actual.proxy || "未检测到系统代理";
@@ -89,7 +93,7 @@ async function refresh() {
 $("save-start").addEventListener("click", async () => {
   $("setup-error").textContent = "";
   try {
-    const roots = $("roots").value.split(",").map((value) => value.trim()).filter(Boolean);
+    const roots = $("roots").value ? [$("roots").value.trim()] : [];
     await invoke("configure", {
       settings: {
         allowedRoots: roots,
@@ -103,6 +107,16 @@ $("save-start").addEventListener("click", async () => {
     $("tunnel-token").value = "";
     $("pilot-token").value = "";
     await refresh();
+  } catch (error) {
+    $("setup-error").textContent = String(error);
+  }
+});
+
+$("choose-folder").addEventListener("click", async () => {
+  $("setup-error").textContent = "";
+  try {
+    const selected = await open({ directory: true, multiple: false, title: "选择 ChatGPT 可以访问的文件夹" });
+    if (typeof selected === "string") $("roots").value = selected;
   } catch (error) {
     $("setup-error").textContent = String(error);
   }
@@ -122,6 +136,24 @@ $("copy-code").addEventListener("click", async () => {
   }
   await navigator.clipboard.writeText(code);
   $("message").textContent = "连接密码已复制。请在 ChatGPT 授权页粘贴。";
+});
+
+async function copyMcpAddress() {
+  if (!currentMcpUrl) {
+    $("message").textContent = "公网连接还没有准备好。";
+    return false;
+  }
+  await navigator.clipboard.writeText(currentMcpUrl);
+  $("message").textContent = "连接地址已复制。";
+  return true;
+}
+
+$("copy-address").addEventListener("click", () => { void copyMcpAddress(); });
+
+$("connect-chatgpt").addEventListener("click", async () => {
+  if (!(await copyMcpAddress())) return;
+  await openExternal("https://chatgpt.com/");
+  $("message").textContent = "地址已复制，ChatGPT 已打开。请在连接设置中粘贴地址并完成授权。";
 });
 
 $("check-update").addEventListener("click", async () => {

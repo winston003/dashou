@@ -15,23 +15,29 @@
 
       <section id="setup" class="card hidden">
         <h2>第一次设置</h2>
-        <p>选择 ChatGPT 可以访问的目录，并填写管理员给你的连接信息。</p>
+        <p>先选一个要让 ChatGPT 帮你处理的文件夹，再填写管理员给你的连接信息。</p>
         <label>
           授权目录
-          <input id="roots" type="text" placeholder="例如：C:\\Users\\你\\Projects 或 /Users/你/Projects" />
+          <div class="path-picker">
+            <input id="roots" type="text" placeholder="尚未选择文件夹" readonly />
+            <button id="choose-folder" type="button">选择文件夹</button>
+          </div>
         </label>
-        <label>
-          公网地址
-          <input id="public-url" type="url" placeholder="https://alice.warmbyte.studio" />
-        </label>
-        <label>
-          内测连接码 <span class="muted">（管理员分配，不是 npm 密码）</span>
-          <input id="pilot-token" type="password" autocomplete="off" />
-        </label>
-        <label>
-          Tunnel Token <span class="muted">（管理员提供时填写，没有就留空）</span>
-          <input id="tunnel-token" type="password" autocomplete="off" />
-        </label>
+        <details class="advanced">
+          <summary>连接信息</summary>
+          <label>
+            公网地址
+            <input id="public-url" type="url" placeholder="https://alice.warmbyte.studio" />
+          </label>
+          <label>
+            内测连接码 <span class="muted">（管理员分配）</span>
+            <input id="pilot-token" type="password" autocomplete="off" />
+          </label>
+          <label>
+            Tunnel Token <span class="muted">（管理员提供时填写，没有就留空）</span>
+            <input id="tunnel-token" type="password" autocomplete="off" />
+          </label>
+        </details>
         <button id="save-start" class="primary">保存并启动</button>
         <p id="setup-error" class="error"></p>
       </section>
@@ -45,7 +51,9 @@
         <div class="detail"><span>网络</span><code id="proxy">—</code></div>
         <div class="detail"><span>版本</span><code id="version">—</code></div>
         <div class="actions">
+          <button id="connect-chatgpt" class="primary">连接 ChatGPT</button>
           <button id="copy-code">复制连接密码</button>
+          <button id="copy-address">复制连接地址</button>
           <button id="check-update">检查更新</button>
           <button id="reconfigure">重新设置</button>
         </div>

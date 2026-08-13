@@ -1,6 +1,6 @@
 [package]
 name = "dashou-desktop"
-version = "0.1.2-rc7"
+version = "0.1.2-rc8"
 description = "搭手 Dashou desktop launcher"
 authors = ["Warmbyte"]
 edition = "2021"
@@ -15,6 +15,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-process = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 getrandom = "0.3"
 libc = "0.2"

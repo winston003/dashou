@@ -17,6 +17,12 @@ input:focus { outline: 2px solid #d5a679; outline-offset: 1px; }
 button { margin-top: 21px; padding: 10px 15px; border: 1px solid #d4c7b7; border-radius: 9px; background: #fffdf9; color: #443b32; font: inherit; cursor: pointer; }
 button:hover { background: #f3e9dc; }
 button.primary { border-color: #9b6339; background: #9b6339; color: white; }
+.path-picker { display: flex; gap: 8px; align-items: center; }
+.path-picker input { flex: 1; min-width: 0; }
+.path-picker button { flex: 0 0 auto; margin-top: 7px; }
+.advanced { margin-top: 20px; color: #4d463e; font-size: 13px; }
+.advanced summary { cursor: pointer; font-weight: 650; }
+.advanced label { margin-top: 17px; }
 .actions { display: flex; gap: 10px; }
 .actions button { margin-top: 18px; }
 .hidden { display: none; }

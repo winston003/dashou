@@ -183,7 +183,7 @@ MCP URL 为：
 https://xxx.warmbyte.studio/mcp
 ```
 
-首次连接会打开搭手授权页。用户输入 `dashou init` 生成的连接密码完成 OAuth 授权。
+桌面安装包的首次设置使用系统文件夹选择器，不要求用户手写路径。服务准备好后，点击“连接 ChatGPT”会复制 MCP 地址并打开 ChatGPT；用户仍需在 ChatGPT 中粘贴地址，并亲自完成最终 OAuth 授权。也可以分别使用“复制连接地址”和“复制连接密码”。首次连接会打开搭手授权页；用户输入 `dashou init` 生成的连接密码完成 OAuth 授权。
 
 连接后模型只能看到五个工具：
 

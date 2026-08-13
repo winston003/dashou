@@ -25,4 +25,4 @@ Once a signed desktop release is published, the app checks for updates in the ba
 
 ## First-run flow
 
-The user selects an authorized directory, enters the administrator-issued pilot connection code, optionally enters a Tunnel token, and enters the assigned HTTPS public host. The app stores the connection code and generated OAuth owner token in a private application-data file, starts the bundled service, and exposes only the existing five-tool MCP contract.
+The user selects an authorized folder with the native folder picker, opens the connection-information section, enters the administrator-issued pilot connection code and assigned HTTPS public host, and optionally enters a Tunnel token. After the service is healthy, “连接 ChatGPT” copies the MCP address and opens ChatGPT; the user still pastes the address and completes OAuth themselves. The app stores the connection code and generated OAuth owner token in a private application-data file, starts the bundled service, and exposes only the existing five-tool MCP contract.

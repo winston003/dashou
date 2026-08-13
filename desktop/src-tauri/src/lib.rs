@@ -689,6 +689,8 @@ fn path_separator() -> char {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(DaemonState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
@@ -760,7 +762,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.2-rc7".into(),
+            version: "0.1.2-rc8".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
