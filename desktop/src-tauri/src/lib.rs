@@ -7,9 +7,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-#[cfg(unix)]
 use std::thread;
-#[cfg(unix)]
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, RunEvent, State};
 
@@ -195,6 +193,19 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
         std::env::var("PATH").unwrap_or_default()
     );
     let pilot_token = read_pilot_token(&config_dir).unwrap_or_default();
+    let log_path = data_dir.join("logs").join("runtime.log");
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let log_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|error| format!("无法打开后台运行日志：{error}"))?;
+    set_private_file(&log_path)?;
+    let log_file_for_stdout = log_file
+        .try_clone()
+        .map_err(|error| format!("无法准备后台运行日志：{error}"))?;
     let mut command = Command::new(node);
     command
         // The bundled Node 22 runtime supports this flag and must honor the
@@ -213,8 +224,8 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
         .env("DASHOU_EMBEDDED_RUNTIME", "1")
         .env("PATH", path)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(log_file_for_stdout))
+        .stderr(Stdio::from(log_file));
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(&mut command, 0x08000000 | 0x00000200);
     #[cfg(unix)]
@@ -228,11 +239,24 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
             Ok(())
         });
     }
-    *guard = Some(
-        command
-            .spawn()
-            .map_err(|error| format!("无法启动搭手服务：{error}"))?,
-    );
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("无法启动搭手服务：{error}"))?;
+    // A successful spawn only proves that the process was created. Check once
+    // after startup so a configuration/runtime error cannot leave the UI
+    // claiming that Dashou is running while port 7677 is already dead.
+    thread::sleep(Duration::from_millis(350));
+    if let Some(status) = child
+        .try_wait()
+        .map_err(|error| format!("无法确认搭手服务状态：{error}"))?
+    {
+        return Err(format!(
+            "搭手服务启动后立即退出（{}）。运行日志：{}",
+            status,
+            log_path.display()
+        ));
+    }
+    *guard = Some(child);
     Ok(())
 }
 

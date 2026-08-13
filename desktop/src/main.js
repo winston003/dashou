@@ -43,17 +43,26 @@ async function refresh() {
     return;
   }
   if (!current.running) {
-    await invoke("start_daemon");
-    current.running = true;
+    try {
+      await invoke("start_daemon");
+    } catch (error) {
+      setup.classList.add("hidden");
+      ready.classList.remove("hidden");
+      $("status-dot").className = "dot bad";
+      $("status-text").textContent = "搭手未启动";
+      $("ready-copy").textContent = String(error);
+      return;
+    }
   }
+  const actual = await invoke("status");
   setup.classList.add("hidden");
   ready.classList.remove("hidden");
-  $("mcp-url").textContent = current.mcpUrl || "—";
-  $("status-text").textContent = current.running ? "搭手正在运行" : "搭手尚未运行";
-  $("ready-copy").textContent = current.running
+  $("mcp-url").textContent = actual.mcpUrl || "—";
+  $("status-text").textContent = actual.running ? "搭手正在运行" : "搭手尚未运行";
+  $("ready-copy").textContent = actual.running
     ? "现在可以去 ChatGPT 完成 OAuth 连接。"
-    : (current.error || "点击重新设置或重启应用。");
-  $("status-dot").className = "dot " + (current.running ? "ok" : "bad");
+    : (actual.error || "点击重新设置或重启应用。");
+  $("status-dot").className = "dot " + (actual.running ? "ok" : "bad");
 }
 
 $("save-start").addEventListener("click", async () => {
@@ -109,3 +118,8 @@ refresh().catch((error) => {
 // the explicit button remains available for diagnostics.
 void checkAndInstallUpdate({ silent: true });
 setInterval(() => { void checkAndInstallUpdate({ silent: true }); }, UPDATE_INTERVAL_MS);
+setInterval(() => { void refresh().catch((error) => {
+  $("status-dot").className = "dot bad";
+  $("status-text").textContent = "搭手状态检查失败";
+  $("ready-copy").textContent = String(error);
+}); }, 5_000);

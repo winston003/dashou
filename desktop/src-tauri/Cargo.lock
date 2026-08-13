@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "dashou-desktop"
-version = "0.1.2-rc5"
+version = "0.1.2-rc6"
 dependencies = [
  "getrandom 0.3.4",
  "libc",
