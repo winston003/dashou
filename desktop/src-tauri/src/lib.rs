@@ -41,7 +41,9 @@ struct DesktopStatus {
     running: bool,
     version: String,
     mcp_url: Option<String>,
-    connection_code: Option<String>,
+    local_health: bool,
+    public_health: bool,
+    proxy: Option<String>,
     error: Option<String>,
 }
 
@@ -64,7 +66,7 @@ struct StoredAuth {
 }
 
 #[tauri::command]
-fn status(app: AppHandle, state: State<'_, DaemonState>) -> Result<DesktopStatus, String> {
+async fn status(app: AppHandle, state: State<'_, DaemonState>) -> Result<DesktopStatus, String> {
     let data_dir = app
         .path()
         .app_data_dir()
@@ -72,17 +74,30 @@ fn status(app: AppHandle, state: State<'_, DaemonState>) -> Result<DesktopStatus
     let config_path = data_dir.join("config").join("config.json");
     let configured = config_path.exists();
     let running = daemon_is_running(&state);
-    let mcp_url = if configured {
-        read_public_url(&config_path).map(|url| format!("{}/mcp", url.trim_end_matches('/')))
+    let proxy = apply_system_proxy_environment();
+    let (mcp_url, local_health, public_health) = if configured && running {
+        let public_url = read_public_url(&config_path);
+        let port = read_port(&config_path).unwrap_or(7677);
+        let mcp_url = public_url
+            .as_ref()
+            .map(|url| format!("{}/mcp", url.trim_end_matches('/')));
+        let local_health = probe_health(&format!("http://127.0.0.1:{port}/healthz")).await;
+        let public_health = match public_url.as_deref() {
+            Some(url) => probe_health(&format!("{}/healthz", url.trim_end_matches('/'))).await,
+            None => false,
+        };
+        (mcp_url, local_health, public_health)
     } else {
-        None
+        (None, false, false)
     };
     Ok(DesktopStatus {
         configured,
         running,
         version: env!("CARGO_PKG_VERSION").to_string(),
         mcp_url,
-        connection_code: read_owner_token(config_path.parent().unwrap_or(Path::new(""))),
+        local_health,
+        public_health,
+        proxy,
         error: None,
     })
 }
@@ -145,6 +160,7 @@ fn configure(app: AppHandle, settings: DesktopSettings) -> Result<(), String> {
 
 #[tauri::command]
 fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), String> {
+    apply_system_proxy_environment();
     let mut guard = state.0.lock().map_err(|_| "后台服务状态锁已损坏")?;
     if let Some(child) = guard.as_mut() {
         if child
@@ -208,8 +224,8 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
         .map_err(|error| format!("无法准备后台运行日志：{error}"))?;
     let mut command = Command::new(node);
     command
-        // The bundled Node 22 runtime supports this flag and must honor the
-        // user's HTTPS_PROXY/NO_PROXY settings on networks that require one.
+        // The bundled Node 22 runtime supports this flag. Proxy environment
+        // variables are filled from the OS settings immediately before spawn.
         .arg("--use-env-proxy")
         .arg(cli)
         .arg("serve")
@@ -325,6 +341,249 @@ fn stop_child(state: &State<'_, DaemonState>) -> Result<(), String> {
 fn read_public_url(path: &Path) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
     value.get("publicBaseUrl")?.as_str().map(str::to_string)
+}
+
+fn read_port(path: &Path) -> Option<u16> {
+    let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    value
+        .get("port")?
+        .as_u64()
+        .and_then(|port| u16::try_from(port).ok())
+}
+
+async fn probe_health(url: &str) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(2))
+        .build()
+    else {
+        return false;
+    };
+    let Ok(response) = client.get(url).send().await else {
+        return false;
+    };
+    if !response.status().is_success() {
+        return false;
+    }
+    let Ok(body) = response.text().await else {
+        return false;
+    };
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return false;
+    };
+    payload.get("ok").and_then(serde_json::Value::as_bool) == Some(true)
+        && payload.get("name").and_then(serde_json::Value::as_str) == Some("dashou")
+}
+
+#[derive(Clone, Debug, Default)]
+struct ProxySettings {
+    http: Option<String>,
+    https: Option<String>,
+    no_proxy: Option<String>,
+}
+
+fn apply_system_proxy_environment() -> Option<String> {
+    let detected = detect_system_proxy();
+    if let Some(value) = detected.http.as_deref() {
+        set_env_if_missing("HTTP_PROXY", value);
+        set_env_if_missing("http_proxy", value);
+    }
+    if let Some(value) = detected.https.as_deref().or(detected.http.as_deref()) {
+        set_env_if_missing("HTTPS_PROXY", value);
+        set_env_if_missing("https_proxy", value);
+    }
+    if let Some(value) = detected.no_proxy.as_deref() {
+        set_env_if_missing("NO_PROXY", value);
+        set_env_if_missing("no_proxy", value);
+    }
+
+    let selected = std::env::var("HTTPS_PROXY")
+        .ok()
+        .or_else(|| std::env::var("https_proxy").ok())
+        .or_else(|| std::env::var("ALL_PROXY").ok())
+        .or_else(|| std::env::var("all_proxy").ok())
+        .or(detected.https)
+        .or(detected.http);
+    if selected.is_some()
+        && std::env::var_os("NO_PROXY").is_none()
+        && std::env::var_os("no_proxy").is_none()
+    {
+        set_env_if_missing("NO_PROXY", "localhost,127.0.0.1,::1");
+        set_env_if_missing("no_proxy", "localhost,127.0.0.1,::1");
+    }
+    selected.map(|value| redact_proxy(&value))
+}
+
+fn set_env_if_missing(key: &str, value: &str) {
+    if std::env::var_os(key).is_none() {
+        std::env::set_var(key, value);
+    }
+}
+
+fn detect_system_proxy() -> ProxySettings {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = Command::new("scutil").arg("--proxy").output() {
+            if output.status.success() {
+                return parse_scutil_proxy(&String::from_utf8_lossy(&output.stdout));
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(output) = Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+            ])
+            .output()
+        {
+            if output.status.success() {
+                return parse_windows_proxy(&String::from_utf8_lossy(&output.stdout));
+            }
+        }
+    }
+    ProxySettings::default()
+}
+
+fn parse_scutil_proxy(output: &str) -> ProxySettings {
+    let enabled = |key: &str| scutil_value(output, key).as_deref() == Some("1");
+    let host = scutil_value(output, "HTTPProxy");
+    let http_port = scutil_value(output, "HTTPPort");
+    let https_host = scutil_value(output, "HTTPSProxy").or_else(|| host.clone());
+    let https_port = scutil_value(output, "HTTPSPort").or_else(|| http_port.clone());
+    let http = if enabled("HTTPEnable") {
+        proxy_url(host.as_deref(), http_port.as_deref())
+    } else {
+        None
+    };
+    let https = if enabled("HTTPSEnable") {
+        proxy_url(https_host.as_deref(), https_port.as_deref())
+    } else {
+        None
+    };
+    let no_proxy = scutil_exceptions(output);
+    ProxySettings {
+        http,
+        https,
+        no_proxy,
+    }
+}
+
+fn scutil_value(output: &str, key: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let (line_key, value) = line.split_once(':')?;
+        if line_key.trim() == key {
+            Some(value.trim().to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn scutil_exceptions(output: &str) -> Option<String> {
+    let values: Vec<String> = output
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            if !key
+                .trim()
+                .chars()
+                .all(|character| character.is_ascii_digit())
+            {
+                return None;
+            }
+            let value = value.trim();
+            if value.is_empty() || value == "<local>" {
+                None
+            } else {
+                Some(value.replace("*.", "."))
+            }
+        })
+        .collect();
+    (!values.is_empty()).then(|| values.join(","))
+}
+
+#[cfg(windows)]
+fn parse_windows_proxy(output: &str) -> ProxySettings {
+    let enabled = output.lines().any(|line| {
+        line.to_ascii_lowercase().contains("proxyenable") && line.trim_end().ends_with("0x1")
+    });
+    if !enabled {
+        return ProxySettings::default();
+    }
+    let server = output.lines().find_map(|line| {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("proxyserver") {
+            line.split_whitespace().last().map(str::to_string)
+        } else {
+            None
+        }
+    });
+    let mut settings = ProxySettings::default();
+    if let Some(server) = server {
+        for entry in server.split(';') {
+            let (scheme, address) = entry.split_once('=').unwrap_or(("http", entry));
+            let value = proxy_url_from_address(address.trim());
+            if scheme.eq_ignore_ascii_case("https") {
+                settings.https = value;
+            } else if scheme.eq_ignore_ascii_case("http") {
+                settings.http = value;
+            }
+        }
+    }
+    settings.no_proxy = output.lines().find_map(|line| {
+        if line.to_ascii_lowercase().contains("proxyoverride") {
+            let value = line.split_whitespace().last()?.replace(';', ",");
+            Some(value.replace("<local>", "localhost"))
+        } else {
+            None
+        }
+    });
+    settings
+}
+
+fn proxy_url(host: Option<&str>, port: Option<&str>) -> Option<String> {
+    let host = host?.trim();
+    let port = port?.trim();
+    if host.is_empty()
+        || port.is_empty()
+        || !port.chars().all(|character| character.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(format!("http://{}:{}", format_host(host), port))
+}
+
+#[cfg(windows)]
+fn proxy_url_from_address(address: &str) -> Option<String> {
+    let address = address.trim();
+    if address.is_empty() {
+        return None;
+    }
+    let value = if address.starts_with("http://") || address.starts_with("https://") {
+        address.to_string()
+    } else {
+        format!("http://{address}")
+    };
+    value.parse::<reqwest::Url>().ok().map(|_| value)
+}
+
+fn format_host(host: &str) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    }
+}
+
+fn redact_proxy(value: &str) -> String {
+    let Ok(mut url) = value.parse::<reqwest::Url>() else {
+        return "系统代理已启用".into();
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.to_string()
 }
 
 fn read_owner_token(config_dir: &Path) -> Option<String> {
@@ -482,6 +741,48 @@ mod tests {
         make_resource_tree(&vendor);
         assert_eq!(locate_resource_root(&root), vendor);
         fs::remove_dir_all(root).expect("remove resource test directory");
+    }
+
+    #[test]
+    fn parses_macos_system_proxy_and_exceptions() {
+        let output = "<dictionary> {\n  ExceptionsList : <array> {\n    0 : 127.0.0.1\n    1 : *.warmbyte.studio\n    2 : <local>\n  }\n  HTTPEnable : 1\n  HTTPPort : 1082\n  HTTPProxy : 127.0.0.1\n  HTTPSEnable : 1\n  HTTPSPort : 1082\n  HTTPSProxy : 127.0.0.1\n}";
+        let settings = parse_scutil_proxy(output);
+        assert_eq!(settings.http.as_deref(), Some("http://127.0.0.1:1082"));
+        assert_eq!(settings.https.as_deref(), Some("http://127.0.0.1:1082"));
+        assert_eq!(
+            settings.no_proxy.as_deref(),
+            Some("127.0.0.1,.warmbyte.studio")
+        );
+    }
+
+    #[test]
+    fn desktop_status_does_not_serialize_connection_secret() {
+        let status = DesktopStatus {
+            configured: true,
+            running: true,
+            version: "0.1.2-rc7".into(),
+            mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
+            local_health: true,
+            public_health: true,
+            proxy: None,
+            error: None,
+        };
+        let json = serde_json::to_value(status).expect("serialize status");
+        assert!(json.get("connectionCode").is_none());
+        assert!(json.get("ownerToken").is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_windows_system_proxy() {
+        let output = "    ProxyEnable    REG_DWORD    0x1\n    ProxyServer    REG_SZ    http=127.0.0.1:1082;https=127.0.0.1:1083\n    ProxyOverride  REG_SZ    <local>;*.warmbyte.studio\n";
+        let settings = parse_windows_proxy(output);
+        assert_eq!(settings.http.as_deref(), Some("http://127.0.0.1:1082"));
+        assert_eq!(settings.https.as_deref(), Some("http://127.0.0.1:1083"));
+        assert_eq!(
+            settings.no_proxy.as_deref(),
+            Some("localhost,*.warmbyte.studio")
+        );
     }
 
     fn test_root(label: &str) -> PathBuf {

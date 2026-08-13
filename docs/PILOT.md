@@ -47,6 +47,9 @@ dashou init
 npm run verify:pilot
 ```
 
+`verify:pilot` 本身也可以独立执行：它会先生成当前版本的发布包，再验证全新安装、OAuth、
+Streamable HTTP、五个工具和本地操作闭环。
+
 安装完成后，管理员和用户可先检查：
 
 ```bash

@@ -26,6 +26,7 @@ button.primary { border-color: #9b6339; background: #9b6339; color: white; }
 .status-row { display: flex; align-items: center; gap: 9px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: #d9a24f; }
 .dot.ok { background: #5d9a69; }
+.dot.warn { background: #d9a24f; }
 .dot.bad { background: #b64a3e; }
 .detail { display: flex; justify-content: space-between; gap: 20px; padding: 11px 0; border-bottom: 1px solid #eee6db; color: #81776c; font-size: 12px; }
 code { max-width: 330px; overflow: hidden; color: #4a4037; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }

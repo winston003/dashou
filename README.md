@@ -81,6 +81,9 @@ npm run pack:pilot       # 通过检查后生成当前版本的 releases/warmbyt
 npm run verify:pilot
 ```
 
+`verify:pilot` 会自动先生成当前版本的临时发布包，因此可以单独执行；`pack:pilot`
+则会在完整发布门禁后继续执行同一套安装、OAuth、五工具和升级验证。
+
 如果需要验证公网 HTTPS、反向代理、OAuth 和 MCP 链路，可运行：
 
 ```bash

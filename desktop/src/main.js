@@ -8,6 +8,7 @@ const setup = $("setup");
 const ready = $("ready");
 const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 let updatePromise;
+let refreshPromise;
 
 async function checkAndInstallUpdate({ silent = false } = {}) {
   if (updatePromise) return updatePromise;
@@ -33,36 +34,56 @@ async function checkAndInstallUpdate({ silent = false } = {}) {
 }
 
 async function refresh() {
-  const current = await invoke("status");
-  $("app-version").textContent = current.version ? "v" + current.version : "";
-  $("version").textContent = current.version || "—";
-  $("connection-code").textContent = current.connectionCode || "—";
-  if (!current.configured) {
-    setup.classList.remove("hidden");
-    ready.classList.add("hidden");
-    return;
-  }
-  if (!current.running) {
-    try {
-      await invoke("start_daemon");
-    } catch (error) {
-      setup.classList.add("hidden");
-      ready.classList.remove("hidden");
-      $("status-dot").className = "dot bad";
-      $("status-text").textContent = "搭手未启动";
-      $("ready-copy").textContent = String(error);
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    const current = await invoke("status");
+    $("app-version").textContent = current.version ? "v" + current.version : "";
+    $("version").textContent = current.version || "—";
+    if (!current.configured) {
+      setup.classList.remove("hidden");
+      ready.classList.add("hidden");
       return;
     }
+    if (!current.running) {
+      try {
+        await invoke("start_daemon");
+      } catch (error) {
+        setup.classList.add("hidden");
+        ready.classList.remove("hidden");
+        $("status-dot").className = "dot bad";
+        $("status-text").textContent = "搭手未启动";
+        $("ready-copy").textContent = String(error);
+        return;
+      }
+    }
+    const actual = await invoke("status");
+    setup.classList.add("hidden");
+    ready.classList.remove("hidden");
+    $("mcp-url").textContent = actual.mcpUrl || "—";
+    $("local-health").textContent = actual.localHealth ? "正常" : "不可用";
+    $("public-health").textContent = actual.publicHealth ? "正常" : "等待连接";
+    $("proxy").textContent = actual.proxy || "未检测到系统代理";
+    const readyForChatGPT = actual.running && actual.localHealth && actual.publicHealth;
+    const localOnly = actual.running && actual.localHealth;
+    $("status-text").textContent = readyForChatGPT
+      ? "可以连接 ChatGPT"
+      : localOnly
+        ? "正在等待公网连接"
+        : actual.running
+          ? "本地服务不可用"
+          : "搭手尚未运行";
+    $("ready-copy").textContent = readyForChatGPT
+      ? "搭手已准备好。点击下方按钮复制连接密码，再去 ChatGPT 完成连接。"
+      : localOnly
+        ? "本地服务正常，但公网入口还没有响应；请检查网络或 Tunnel。"
+        : actual.error || "正在检查本地服务。";
+    $("status-dot").className = "dot " + (readyForChatGPT ? "ok" : localOnly ? "warn" : "bad");
+  })();
+  try {
+    return await refreshPromise;
+  } finally {
+    refreshPromise = undefined;
   }
-  const actual = await invoke("status");
-  setup.classList.add("hidden");
-  ready.classList.remove("hidden");
-  $("mcp-url").textContent = actual.mcpUrl || "—";
-  $("status-text").textContent = actual.running ? "搭手正在运行" : "搭手尚未运行";
-  $("ready-copy").textContent = actual.running
-    ? "现在可以去 ChatGPT 完成 OAuth 连接。"
-    : (actual.error || "点击重新设置或重启应用。");
-  $("status-dot").className = "dot " + (actual.running ? "ok" : "bad");
 }
 
 $("save-start").addEventListener("click", async () => {
@@ -96,11 +117,11 @@ $("reconfigure").addEventListener("click", async () => {
 $("copy-code").addEventListener("click", async () => {
   const code = await invoke("connection_code");
   if (!code) {
-    $("message").textContent = "尚未生成连接码。";
+    $("message").textContent = "尚未生成连接密码。";
     return;
   }
   await navigator.clipboard.writeText(code);
-  $("message").textContent = "连接码已复制。请在 ChatGPT 授权页粘贴。";
+  $("message").textContent = "连接密码已复制。请在 ChatGPT 授权页粘贴。";
 });
 
 $("check-update").addEventListener("click", async () => {

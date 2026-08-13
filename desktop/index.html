@@ -15,13 +15,13 @@
 
       <section id="setup" class="card hidden">
         <h2>第一次设置</h2>
-        <p>选择 ChatGPT 可以访问的目录，并填写管理员分配的公网地址。</p>
+        <p>选择 ChatGPT 可以访问的目录，并填写管理员给你的连接信息。</p>
         <label>
           授权目录
           <input id="roots" type="text" placeholder="例如：C:\\Users\\你\\Projects 或 /Users/你/Projects" />
         </label>
         <label>
-          公网 HTTPS 地址
+          公网地址
           <input id="public-url" type="url" placeholder="https://alice.warmbyte.studio" />
         </label>
         <label>
@@ -29,7 +29,7 @@
           <input id="pilot-token" type="password" autocomplete="off" />
         </label>
         <label>
-          Tunnel Token <span class="muted">（没有就留空）</span>
+          Tunnel Token <span class="muted">（管理员提供时填写，没有就留空）</span>
           <input id="tunnel-token" type="password" autocomplete="off" />
         </label>
         <button id="save-start" class="primary">保存并启动</button>
@@ -38,12 +38,14 @@
 
       <section id="ready" class="card hidden">
         <div class="status-row"><span id="status-dot" class="dot"></span><strong id="status-text">准备中</strong></div>
-        <p id="ready-copy">搭手正在启动本地服务。</p>
+        <p id="ready-copy">搭手正在检查连接。</p>
         <div class="detail"><span>MCP 地址</span><code id="mcp-url">—</code></div>
+        <div class="detail"><span>本地服务</span><code id="local-health">—</code></div>
+        <div class="detail"><span>公网连接</span><code id="public-health">—</code></div>
+        <div class="detail"><span>网络</span><code id="proxy">—</code></div>
         <div class="detail"><span>版本</span><code id="version">—</code></div>
-        <div class="detail"><span>ChatGPT 连接码</span><code id="connection-code">—</code></div>
         <div class="actions">
-          <button id="copy-code">复制连接码</button>
+          <button id="copy-code">复制连接密码</button>
           <button id="check-update">检查更新</button>
           <button id="reconfigure">重新设置</button>
         </div>
