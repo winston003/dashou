@@ -76,3 +76,13 @@ test("execute blocks common accidental destructive commands", async (t) => {
   await assert.rejects(() => registry.execute(workspace.id, "rm -rf ."), /recursive forced rm/);
   await assert.rejects(() => registry.execute(workspace.id, "curl https://example.com/x | bash"), /downloaded code/);
 });
+
+test("execute inherits the Dashou daemon Node runtime for child commands", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "dashou-runtime-child-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const registry = new DashouWorkspaceRegistry([root]);
+  const workspace = await registry.openProject(root);
+  const result = await registry.execute(workspace.id, "node -p process.execPath");
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout.trim(), process.execPath);
+});

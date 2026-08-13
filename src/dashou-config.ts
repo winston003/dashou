@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import type { DashouPilotPolicy, DashouPilotRemoteConfig } from "./dashou-pilot-policy.js";
 
 export interface DashouUserConfig {
   host?: string;
@@ -10,6 +11,8 @@ export interface DashouUserConfig {
   allowedHosts?: string[];
   publicBaseUrl?: string;
   stateDir?: string;
+  pilot?: Partial<DashouPilotPolicy>;
+  pilotPolicyUrl?: string;
 }
 
 export interface DashouAuthFile {
@@ -32,6 +35,8 @@ export interface DashouConfig {
     refreshTokenTtlSeconds: number;
     scopes: string[];
     allowedRedirectHosts: string[];
+    pilot?: DashouPilotPolicy;
+    pilotRemote?: DashouPilotRemoteConfig;
   };
 }
 
@@ -140,6 +145,18 @@ export function loadDashouConfig(env: NodeJS.ProcessEnv = process.env): DashouCo
         "localhost",
         "127.0.0.1",
       ]),
+      pilot: {
+        enabled: env.DASHOU_PILOT_ENABLED === undefined
+          ? files.config.pilot?.enabled ?? true
+          : bool(env.DASHOU_PILOT_ENABLED),
+        ...(env.DASHOU_PILOT_ACCOUNT_ID?.trim() || files.config.pilot?.accountId
+          ? { accountId: env.DASHOU_PILOT_ACCOUNT_ID?.trim() || files.config.pilot?.accountId }
+          : {}),
+        ...(env.DASHOU_PILOT_EXPIRES_AT?.trim() || files.config.pilot?.expiresAt
+          ? { expiresAt: env.DASHOU_PILOT_EXPIRES_AT?.trim() || files.config.pilot?.expiresAt }
+          : {}),
+      },
+      ...loadPilotRemoteConfig(env, files.config),
     },
   };
 }
@@ -184,6 +201,52 @@ function requiredSecret(value: string | undefined, name: string): string {
 function optionalSecret(value: string | undefined): string | undefined {
   const secret = value?.trim();
   return secret || undefined;
+}
+
+function loadPilotRemoteConfig(
+  env: NodeJS.ProcessEnv,
+  fileConfig: DashouUserConfig,
+): { pilotRemote?: DashouPilotRemoteConfig } {
+  const urlValue = env.DASHOU_PILOT_POLICY_URL?.trim() || fileConfig.pilotPolicyUrl?.trim();
+  const token = env.DASHOU_PILOT_POLICY_TOKEN?.trim();
+  const publicKeyPem = env.DASHOU_PILOT_POLICY_PUBLIC_KEY?.trim();
+  if (!urlValue && token) throw new Error("DASHOU_PILOT_POLICY_URL is required when DASHOU_PILOT_POLICY_TOKEN is set");
+  if (!urlValue && publicKeyPem) throw new Error("DASHOU_PILOT_POLICY_URL is required when DASHOU_PILOT_POLICY_PUBLIC_KEY is set");
+  if (!urlValue) return {};
+  if (!token) throw new Error("DASHOU_PILOT_POLICY_TOKEN is required when DASHOU_PILOT_POLICY_URL is set");
+  if (!publicKeyPem) throw new Error("DASHOU_PILOT_POLICY_PUBLIC_KEY is required when DASHOU_PILOT_POLICY_URL is set");
+
+  let url: URL;
+  try {
+    url = new URL(urlValue);
+  } catch {
+    throw new Error("DASHOU_PILOT_POLICY_URL must be a valid http or https URL");
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error("DASHOU_PILOT_POLICY_URL must use http or https");
+  }
+  if (url.protocol === "http:" && !isLoopbackHostname(url.hostname)) {
+    throw new Error("DASHOU_PILOT_POLICY_URL must use https outside localhost/127.0.0.1");
+  }
+
+  const cacheTtlSeconds = positiveInt(
+    env.DASHOU_PILOT_POLICY_CACHE_TTL_SECONDS,
+    300,
+    "DASHOU_PILOT_POLICY_CACHE_TTL_SECONDS",
+    3_600,
+  );
+  return {
+    pilotRemote: {
+      url: url.href,
+      token,
+      publicKeyPem: publicKeyPem.replaceAll("\\n", "\n"),
+      cacheTtlMs: cacheTtlSeconds * 1_000,
+    },
+  };
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
 }
 
 function positiveInt(

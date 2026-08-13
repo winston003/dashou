@@ -13,6 +13,7 @@ import {
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { expandHome } from "./dashou-config.js";
+import { runtimeEnvironment } from "./dashou-runtime-contract.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_READ_BYTES = 2 * 1024 * 1024;
@@ -150,7 +151,7 @@ export class DashouWorkspaceRegistry {
         timeout: timeoutSeconds * 1000,
         maxBuffer: MAX_COMMAND_BUFFER,
         encoding: "utf8",
-        env: { ...process.env, PWD: cwd },
+        env: { ...runtimeEnvironment(), PWD: cwd },
       });
       return boundedCommandResult(result.stdout, result.stderr, 0);
     } catch (error) {

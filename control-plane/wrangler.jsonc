@@ -1,0 +1,15 @@
+{
+  "$schema": "https://developers.cloudflare.com/workers/wrangler/config-schema.json",
+  "name": "dashou-pilot-control",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-13",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "dashou-pilot-control",
+      "database_id": "7f9a3f08-ff71-473a-9a99-1c419d3da340",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

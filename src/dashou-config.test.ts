@@ -30,6 +30,73 @@ test("Dashou config is isolated under its own directory", () => {
   assert.deepEqual(config.allowedRoots, [process.cwd()]);
   assert.equal(config.publicBaseUrl, "https://demo.warmbyte.studio");
   assert.deepEqual(config.oauth.scopes, ["dashou"]);
+  assert.equal(config.oauth.pilot?.enabled, true);
+});
+
+test("controlled pilot policy can be disabled or expired by environment", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dashou-pilot-policy-"));
+  const disabled = loadDashouConfig({
+    DASHOU_CONFIG_DIR: dir,
+    DASHOU_ALLOWED_ROOTS: process.cwd(),
+    DASHOU_OAUTH_OWNER_TOKEN: "a-very-long-dashou-owner-token",
+    DASHOU_PILOT_ACCOUNT_ID: "pilot-alice",
+    DASHOU_PILOT_ENABLED: "0",
+    DASHOU_PILOT_EXPIRES_AT: "2030-01-01T00:00:00.000Z",
+  });
+  assert.equal(disabled.oauth.pilot?.enabled, false);
+  assert.equal(disabled.oauth.pilot?.accountId, "pilot-alice");
+  assert.equal(disabled.oauth.pilot?.expiresAt, "2030-01-01T00:00:00.000Z");
+});
+
+test("remote pilot policy requires a URL and a secret and supports short TTL", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dashou-remote-pilot-"));
+  assert.throws(() => loadDashouConfig({
+    DASHOU_CONFIG_DIR: dir,
+    DASHOU_ALLOWED_ROOTS: process.cwd(),
+    DASHOU_OAUTH_OWNER_TOKEN: "a-very-long-dashou-owner-token",
+    DASHOU_PILOT_POLICY_TOKEN: "control-secret",
+  }), /DASHOU_PILOT_POLICY_URL is required/);
+  assert.throws(() => loadDashouConfig({
+    DASHOU_CONFIG_DIR: dir,
+    DASHOU_ALLOWED_ROOTS: process.cwd(),
+    DASHOU_OAUTH_OWNER_TOKEN: "a-very-long-dashou-owner-token",
+    DASHOU_PILOT_POLICY_URL: "https://control.example/pilot",
+  }), /DASHOU_PILOT_POLICY_TOKEN is required/);
+  assert.throws(() => loadDashouConfig({
+    DASHOU_CONFIG_DIR: dir,
+    DASHOU_ALLOWED_ROOTS: process.cwd(),
+    DASHOU_OAUTH_OWNER_TOKEN: "a-very-long-dashou-owner-token",
+    DASHOU_PILOT_POLICY_URL: "https://control.example/pilot",
+    DASHOU_PILOT_POLICY_TOKEN: "control-secret",
+  }), /DASHOU_PILOT_POLICY_PUBLIC_KEY is required/);
+
+  const config = loadDashouConfig({
+    DASHOU_CONFIG_DIR: dir,
+    DASHOU_ALLOWED_ROOTS: process.cwd(),
+    DASHOU_OAUTH_OWNER_TOKEN: "a-very-long-dashou-owner-token",
+    DASHOU_PILOT_POLICY_URL: "https://control.example/pilot",
+    DASHOU_PILOT_POLICY_TOKEN: "control-secret",
+    DASHOU_PILOT_POLICY_PUBLIC_KEY: "-----BEGIN PUBLIC KEY-----\\nkey\\n-----END PUBLIC KEY-----",
+    DASHOU_PILOT_POLICY_CACHE_TTL_SECONDS: "30",
+  });
+  assert.deepEqual(config.oauth.pilotRemote, {
+    url: "https://control.example/pilot",
+    token: "control-secret",
+    publicKeyPem: "-----BEGIN PUBLIC KEY-----\nkey\n-----END PUBLIC KEY-----",
+    cacheTtlMs: 30_000,
+  });
+});
+
+test("remote pilot policy refuses cleartext outside loopback", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dashou-remote-http-"));
+  assert.throws(() => loadDashouConfig({
+    DASHOU_CONFIG_DIR: dir,
+    DASHOU_ALLOWED_ROOTS: process.cwd(),
+    DASHOU_OAUTH_OWNER_TOKEN: "a-very-long-dashou-owner-token",
+    DASHOU_PILOT_POLICY_URL: "http://control.example/pilot",
+    DASHOU_PILOT_POLICY_TOKEN: "control-secret",
+    DASHOU_PILOT_POLICY_PUBLIC_KEY: "public-key",
+  }), /must use https outside/);
 });
 
 test("Dashou env configuration works without persisted files", () => {

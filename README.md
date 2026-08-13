@@ -6,6 +6,11 @@
 
 当前版本的目标不是做完整 Agent OS，而是验证一个最小产品假设：用户是否愿意持续使用 ChatGPT 直接完成本地工作，并为这种便利付费。
 
+Dashou 吸收了 DevSpace v3 中与这个最小链路直接相关的运行可靠性改进：`doctor` 在 Node
+运行时不匹配时仍可启动并给出修复信息；`serve` 对同一个状态目录只允许一个实例；经过反向代理
+时只信任一跳 forwarded 地址；关闭服务时先停止接收请求，再关闭 OAuth/MCP 状态。DevSpace v3
+的 Task、Lease、Review、Multi-Agent 和 Task Pulse 治理不进入 V0，以保持 ChatGPT 只看到五个工具。
+
 ## V0 能力
 
 ChatGPT 只看到 5 个工具：
@@ -36,6 +41,7 @@ V0 默认不开放 Task、多 Agent、Review、Lease、Worktree、Skills、Cloud
 npm install
 npm test
 npm run build
+npm run verify:pilot
 node dist/dashou-cli.js init
 node dist/dashou-cli.js serve
 ```
@@ -60,6 +66,83 @@ Tunnel Token 与连接密码都只保存在 `~/.dashou/auth.json`（权限 `0600
 默认本地端口为 `7677`，避免与现有 DevSpace `7676` 冲突。MCP App / Template UI 不属于 V0 核心链路，ChatGPT 默认直接使用原生工具展示。
 
 第一轮内测流程见 `docs/PILOT.md`。
+
+发布前检查：
+
+```bash
+npm run verify:release   # typecheck、完整测试、build、生产依赖审计
+npm run pack:pilot       # 通过检查后生成当前版本的 releases/warmbyte-dashou-<version>.tgz
+```
+
+安装包 smoke 会在全新临时环境验证安装、`doctor --json`、OAuth、Streamable HTTP
+以及五个工具的读写和命令执行闭环：
+
+```bash
+npm run verify:pilot
+```
+
+如果需要验证公网 HTTPS、反向代理、OAuth 和 MCP 链路，可运行：
+
+```bash
+npm run verify:public
+```
+
+它会启动一个隔离测试目录、Dashou 和临时 Cloudflare Quick Tunnel，完成公网健康检查、OAuth、
+五工具列表以及读写修改执行闭环后自动关闭。Quick Tunnel 没有稳定域名；该命令也不代表真实
+ChatGPT UI 或真实用户验收。
+
+安装后的诊断和升级检查：
+
+```bash
+dashou doctor --json
+dashou upgrade --check
+```
+
+要自动验证“全新安装 → 公网连接 → OpenAI/ChatGPT 发送消息 → 本地读取、修改、执行”，可对一次性
+临时目录运行 Responses API 链路：
+
+```bash
+OPENAI_API_KEY='由用户自己注入' npm run verify:openai:local
+```
+
+该命令会安装当前包到临时目录，启动 Dashou 和一次性 Cloudflare Quick Tunnel，让模型发送真实
+Responses API 消息并调用五个工具，最后检查临时文件和命令输出。写入、修改、执行只作用于该命令
+创建的临时目录；需要明确设置 `OPENAI_MCP_AUTO_APPROVE_MUTATIONS=1` 才会自动批准这三个变更工具：
+
+```bash
+OPENAI_MCP_AUTO_APPROVE_MUTATIONS=1 OPENAI_API_KEY='由用户自己注入' npm run verify:openai:local
+```
+
+这是 OpenAI Responses API 的自动化证据，不等于 ChatGPT 网页 UI；真实 ChatGPT UI 仍需在一个已登录
+且允许连接自定义 MCP 的账号中完成一次用户任务。
+
+`upgrade --check` 只检查受信任 GitHub Release 的 CLI 专用清单，不会自动替换 npm 安装。
+当前清单地址可用 `DASHOU_UPDATE_MANIFEST_URL` 覆盖；桌面 Tauri 的 `latest.json` 和
+npm/CLI 的 `cli-latest.json` 是两种格式，不能混用。CLI 清单发布前，该命令会明确报告
+清单尚未提供，不会误把桌面安装包当作 CLI 更新。
+
+明确需要升级时运行 `dashou upgrade --apply`。它只接受受信任的 npm/GitHub CLI tarball，
+下载后先校验清单中的 SHA-256，再调用 npm 全局安装；清单缺少哈希或校验失败时不会安装。
+
+受控内测可通过 `DASHOU_PILOT_ENABLED`、`DASHOU_PILOT_ACCOUNT_ID` 和
+`DASHOU_PILOT_EXPIRES_AT` 标记本机试用状态。它只是本地启动/OAuth 门禁和诊断信息，
+不是 Warmbyte 的账号、计费、每用户 Tunnel 或远程控制面；这些仍需另建平台服务。
+
+如果已经有 Warmbyte 控制面，可配置 `DASHOU_PILOT_POLICY_URL`、临时注入的
+`DASHOU_PILOT_POLICY_TOKEN` 和签名验证用的 `DASHOU_PILOT_POLICY_PUBLIC_KEY`。控制面返回
+短期 signed lease；搭手启动/后台刷新时访问控制面，但健康检查、OAuth 和 access token 校验只做
+本地签名与 expiry 验证，不把控制面放进 MCP 请求热路径。合法 lease 在短暂断网时继续有效，撤销在
+下次刷新或 lease 到期时生效；本机和远端 expiry 取更早者。非 loopback 控制面必须使用 HTTPS。
+
+本仓库同时提供一个最小的单机控制面：
+`DASHOU_PILOT_CONTROL_ADMIN_TOKEN=... DASHOU_PILOT_CONTROL_LEASE_PRIVATE_KEY=... dashou pilot-control`。
+它支持创建账号、启用/禁用、修改到期时间和撤销；账号 token 只以 SHA-256 hash 存储，
+创建响应中的明文 token 只显示一次。它用于首批内测，不是已经具备多租户、计费、审计或高可用的生产平台。
+
+如果已经有可访问的公网 MCP 地址和 API key，可以运行 `npm run verify:openai` 做一次
+OpenAI Responses API remote-MCP smoke。它会检查 Responses API 导入的正好五个工具并发送真实消息；
+默认只自动允许 `open_project` / `read`，写入、修改和执行会停在 approval。只有对一次性测试目录明确设置
+`OPENAI_MCP_AUTO_APPROVE_MUTATIONS=1` 才会继续。这个结果是 OpenAI API 证据，不等于 ChatGPT UI 证据。
 
 ## 产品边界
 

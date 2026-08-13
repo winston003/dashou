@@ -8,22 +8,25 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
 import * as z from "zod/v4";
+import { DASHOU_V0_TOOLS, dashouCapabilities, dashouVersion } from "./dashou-capabilities.js";
 import { loadDashouConfig, type DashouConfig } from "./dashou-config.js";
+import { createPilotAccessGate } from "./dashou-pilot-policy.js";
 import { DashouWorkspaceRegistry } from "./dashou-workspace.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import { McpSessionRegistry } from "./mcp-sessions.js";
 
 const MCP_SESSION_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
 const MCP_SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1_000;
-const VERSION = "0.1.0";
+const VERSION = dashouVersion();
 
 type Transport = StreamableHTTPServerTransport;
 
-export const DASHOU_V0_TOOLS = ["open_project", "read", "write", "edit", "execute"] as const;
+export { DASHOU_V0_TOOLS };
 
 export interface RunningDashouServer {
   app: ReturnType<typeof createMcpExpressApp>;
   config: DashouConfig;
+  ready(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -207,11 +210,16 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
     host: config.host,
     ...(allowedHosts ? { allowedHosts } : {}),
   });
-  if (config.trustProxy) app.set("trust proxy", true);
+  // The public pilot path has exactly one trusted reverse-proxy hop. Trusting
+  // every forwarded address would let a caller spoof the client IP used by
+  // the HTTP stack and any future rate limits.
+  if (config.trustProxy) app.set("trust proxy", 1);
 
   const mcpUrl = new URL("/mcp", config.publicBaseUrl);
   const resourceServerUrl = resourceUrlFromServerUrl(mcpUrl);
-  const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir);
+  const pilotGate = createPilotAccessGate(config.oauth.pilot, config.oauth.pilotRemote, { stateDir: config.stateDir });
+  pilotGate.start();
+  const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir, pilotGate);
   const bearerAuth = requireBearerAuth({
     verifier: oauthProvider,
     requiredScopes: [config.oauth.scopes[0] ?? "dashou"],
@@ -232,7 +240,17 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
   );
 
   app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, name: "dashou", version: VERSION });
+    const pilot = pilotGate.status();
+    res.status(pilot.allowed ? 200 : 503).json({
+      ok: pilot.allowed,
+      name: "dashou",
+      version: VERSION,
+      pilot: { allowed: pilot.allowed, reason: pilot.reason, ...(pilot.expiresAt ? { expiresAt: pilot.expiresAt } : {}) },
+    });
+  });
+
+  app.get("/capabilities", (_req, res) => {
+    res.json(dashouCapabilities());
   });
 
   // Mount authentication as normal Express middleware. On authentication failure
@@ -294,12 +312,21 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
   cleanupTimer.unref();
 
   let closePromise: Promise<void> | undefined;
+  let readyPromise: Promise<void> | undefined;
   return {
     app,
     config,
+    ready: () => {
+      readyPromise ??= (async () => {
+        const pilot = await pilotGate.refresh();
+        if (!pilot.allowed) throw new Error(`搭手试用不可用：${pilot.reason}`);
+      })();
+      return readyPromise;
+    },
     close: () => {
       closePromise ??= (async () => {
         clearInterval(cleanupTimer);
+        pilotGate.stop();
         await transports.closeAll();
         oauthProvider.close();
       })();
@@ -309,10 +336,29 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
 }
 
 export async function closeHttpServer(httpServer: HttpServer, closeApp: () => Promise<void>): Promise<void> {
-  await closeApp();
-  await new Promise<void>((resolve, reject) => {
-    httpServer.close((error) => error ? reject(error) : resolve());
+  const httpClosed = new Promise<void>((resolve, reject) => {
+    httpServer.close((error) => {
+      if (!error || errorCode(error) === "ERR_SERVER_NOT_RUNNING") resolve();
+      else reject(error);
+    });
   });
+  // Start closing MCP transports immediately after stopping new HTTP accepts.
+  // Streamable HTTP SSE connections only drain after their transport closes;
+  // awaiting httpClosed first would deadlock on an active SSE stream.
+  const appClosed = closeApp();
+  await appClosed;
+  // The MCP transport has now ended its response streams. Node may still
+  // retain the underlying keep-alive socket, so make the post-transport drain
+  // explicit instead of waiting forever for server.close() to infer it.
+  httpServer.closeIdleConnections?.();
+  httpServer.closeAllConnections?.();
+  await httpClosed;
+}
+
+function errorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
 }
 
 function sendJsonRpcError(

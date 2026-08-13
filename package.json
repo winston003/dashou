@@ -1,6 +1,6 @@
 {
   "name": "@warmbyte/dashou",
-  "version": "0.1.0",
+  "version": "0.1.2-rc1",
   "description": "让 ChatGPT 安全地读取、修改并执行你授权的本地项目。",
   "type": "module",
   "main": "dist/dashou-server.js",
@@ -23,8 +23,20 @@
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "start": "node dist/dashou-cli.js serve",
-    "test": "tsx src/dashou-config.test.ts && tsx src/dashou-oauth-store.test.ts && tsx src/dashou-workspace.test.ts && tsx src/dashou-tunnel.test.ts && tsx src/dashou-server.test.ts && tsx src/dashou-http.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "test": "tsx src/dashou-config.test.ts && tsx src/dashou-oauth-store.test.ts && tsx src/dashou-workspace.test.ts && tsx src/dashou-tunnel.test.ts && tsx src/dashou-runtime-contract.test.ts && tsx src/dashou-single-instance.test.ts && tsx src/dashou-server-shutdown.test.ts && tsx src/dashou-upgrade.test.ts && tsx src/dashou-pilot-policy.test.ts && tsx src/dashou-pilot-control.test.ts && tsx src/dashou-server.test.ts && tsx src/dashou-http.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify:release": "npm run typecheck && npm test && npm run build && npm_config_registry=https://registry.npmjs.org npm audit --omit=dev",
+    "pack:pilot": "npm run verify:release && node scripts/pack-final.mjs && npm run verify:pilot && npm run verify:upgrade",
+    "make:cli-manifest": "node scripts/cli-manifest.mjs",
+    "verify:pilot": "npm run build && node scripts/pilot-smoke.mjs",
+    "verify:public": "npm run build && node scripts/public-smoke.mjs",
+    "verify:openai": "node scripts/openai-mcp-smoke.mjs",
+    "verify:openai:local": "npm run build && node scripts/openai-local-smoke.mjs",
+    "verify:upgrade": "tsx scripts/upgrade-asset-smoke.mjs",
+    "pilot:admin": "node scripts/pilot-admin.mjs",
+    "deploy:control-plane": "node scripts/deploy-control-plane.mjs",
+    "verify:control-plane": "node --check control-plane/src/index.js && node --test control-plane/src/index.test.mjs && npx wrangler deploy --config control-plane/wrangler.jsonc --dry-run",
+    "prepublishOnly": "npm run verify:release"
   },
   "keywords": [
     "mcp",

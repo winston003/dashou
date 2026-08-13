@@ -15,18 +15,28 @@ import {
   writeDashouConfig,
   type DashouUserConfig,
 } from "./dashou-config.js";
+import { dashouCapabilities, dashouVersion } from "./dashou-capabilities.js";
+import { formatRuntimeContract, runtimeContractReport } from "./dashou-runtime-contract.js";
+import { pilotAccessStatus } from "./dashou-pilot-policy.js";
 import { closeHttpServer, createDashouServer } from "./dashou-server.js";
 import { cloudflaredVersion, startCloudflareTunnel, type RunningCloudflareTunnel } from "./dashou-tunnel.js";
+import { fetchUpdateManifest, installCliUpdate, updateCheck, updateManifestUrl, updatePlatform } from "./dashou-upgrade.js";
+import { createDashouPilotControlServer } from "./dashou-pilot-control-server.js";
+import { acquireServeInstanceLock } from "./dashou-single-instance.js";
 
 const require = createRequire(import.meta.url);
 const DEFAULT_PORT = 7677;
 
-type Command = "serve" | "init" | "doctor" | "config" | "help" | "version";
+type Command = "serve" | "init" | "doctor" | "config" | "upgrade" | "pilot-control" | "help" | "version";
 
 async function main(argv: string[]): Promise<void> {
-  assertSupportedNode();
   const [rawCommand, ...args] = argv;
   const command = normalizeCommand(rawCommand);
+
+  // Keep diagnostics and basic CLI discovery available when a user launches
+  // Dashou with the wrong Node runtime. The actionable command should explain
+  // the mismatch instead of failing before `doctor` can run.
+  if (command === "serve" || command === "upgrade") assertSupportedRuntime();
 
   switch (command) {
     case "serve":
@@ -37,10 +47,16 @@ async function main(argv: string[]): Promise<void> {
       await init(args.includes("--force"));
       return;
     case "doctor":
-      doctor();
+      doctor(args.includes("--json"));
       return;
     case "config":
       configCommand(args);
+      return;
+    case "upgrade":
+      await upgrade(args);
+      return;
+    case "pilot-control":
+      await pilotControlServe();
       return;
     case "version":
       console.log(version());
@@ -53,7 +69,7 @@ async function main(argv: string[]): Promise<void> {
 
 function normalizeCommand(command: string | undefined): Command {
   if (!command || command === "serve" || command === "start") return "serve";
-  if (["serve", "init", "doctor", "config"].includes(command)) return command as Command;
+  if (["serve", "init", "doctor", "config", "upgrade", "pilot-control"].includes(command)) return command as Command;
   if (["help", "--help", "-h"].includes(command)) return "help";
   if (["version", "--version", "-v"].includes(command)) return "version";
   throw new Error(`未知命令：${command}`);
@@ -131,9 +147,20 @@ async function init(force: boolean): Promise<void> {
 }
 
 async function serve(): Promise<void> {
-  const { app, config, close } = createDashouServer();
-  const httpServer = app.listen(config.port, config.host);
-  await once(httpServer, "listening");
+  const config = loadDashouConfig();
+  const instanceLock = acquireServeInstanceLock(config.stateDir);
+  let running: ReturnType<typeof createDashouServer> | undefined;
+  let httpServer: ReturnType<ReturnType<typeof createDashouServer>["app"]["listen"]> | undefined;
+  try {
+    running = createDashouServer(config);
+    await running.ready();
+    httpServer = running.app.listen(config.port, config.host);
+    await once(httpServer, "listening");
+  } catch (error) {
+    instanceLock.release();
+    await running?.close();
+    throw error;
+  }
 
   console.log(`搭手已启动：http://${config.host}:${config.port}/mcp`);
   console.log(`ChatGPT MCP：${new URL("/mcp", config.publicBaseUrl).toString()}`);
@@ -144,7 +171,8 @@ async function serve(): Promise<void> {
   if (config.tunnelToken) {
     const version = cloudflaredVersion();
     if (!version) {
-      await closeHttpServer(httpServer, close);
+      await closeHttpServer(httpServer, running.close);
+      instanceLock.release();
       throw new Error("已配置 Tunnel Token，但没有找到 cloudflared。请先安装 cloudflared，或重新初始化并留空 Tunnel Token。");
     }
     tunnel = startCloudflareTunnel(config.tunnelToken);
@@ -158,8 +186,12 @@ async function serve(): Promise<void> {
     if (closing) return;
     closing = true;
     void (async () => {
-      await tunnel?.close();
-      await closeHttpServer(httpServer, close);
+      try {
+        await tunnel?.close();
+        await closeHttpServer(httpServer!, running!.close);
+      } finally {
+        instanceLock.release();
+      }
     })()
       .then(() => process.exit(0))
       .catch((error) => {
@@ -171,13 +203,85 @@ async function serve(): Promise<void> {
   process.once("SIGTERM", shutdown);
 }
 
-function doctor(): void {
+async function pilotControlServe(): Promise<void> {
+  const adminToken = process.env.DASHOU_PILOT_CONTROL_ADMIN_TOKEN?.trim();
+  if (!adminToken || adminToken.length < 16) {
+    throw new Error("DASHOU_PILOT_CONTROL_ADMIN_TOKEN must be at least 16 characters long");
+  }
+  const leasePrivateKeyPem = process.env.DASHOU_PILOT_CONTROL_LEASE_PRIVATE_KEY?.trim();
+  if (!leasePrivateKeyPem) throw new Error("DASHOU_PILOT_CONTROL_LEASE_PRIVATE_KEY is required");
+  const leaseTtlSeconds = Number(process.env.DASHOU_PILOT_CONTROL_LEASE_TTL_SECONDS?.trim() || "900");
+  if (!Number.isInteger(leaseTtlSeconds) || leaseTtlSeconds < 60 || leaseTtlSeconds > 86_400) {
+    throw new Error("DASHOU_PILOT_CONTROL_LEASE_TTL_SECONDS must be an integer between 60 and 86400");
+  }
+  const host = process.env.DASHOU_PILOT_CONTROL_HOST?.trim() || "127.0.0.1";
+  if (!isLoopbackHost(host)) throw new Error("dashou pilot-control only supports loopback HTTP; put a TLS reverse proxy in front of it");
+  const portText = process.env.DASHOU_PILOT_CONTROL_PORT?.trim() || "8787";
+  const port = Number(portText);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("DASHOU_PILOT_CONTROL_PORT must be 1-65535");
+  const stateDir = resolve(expandHome(process.env.DASHOU_PILOT_CONTROL_STATE_DIR?.trim() || "~/.local/share/dashou-control"));
+  const running = createDashouPilotControlServer({ host, port, stateDir, adminToken, leasePrivateKeyPem, leaseTtlSeconds });
+  await running.listen();
+  console.log(`Dashou pilot control listening on http://${host}:${port}`);
+  console.log(`State directory: ${stateDir}`);
+  console.log("Routes: GET /pilot-policy; GET/POST /admin/pilot/accounts; POST /admin/pilot/accounts/:accountId");
+
+  let closing = false;
+  const shutdown = () => {
+    if (closing) return;
+    closing = true;
+    void running.close().then(() => process.exit(0)).catch((error) => {
+      console.error(`Pilot control shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    });
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+}
+
+function doctor(json = false): void {
   const files = loadDashouFiles();
+  const runtime = runtimeContractReport();
+  const capabilities = dashouCapabilities();
+  if (json) {
+    const report: Record<string, unknown> = {
+      ok: runtime.ok,
+      version: dashouVersion(),
+      configDir: files.dir,
+      configExists: files.configExists,
+      authExists: files.authExists,
+      runtime,
+      capabilities,
+    };
+    try {
+      const config = loadDashouConfig();
+      report.config = {
+        host: config.host,
+        port: config.port,
+        publicMcpUrl: new URL("/mcp", config.publicBaseUrl).toString(),
+        allowedRoots: config.allowedRoots,
+        tunnelConfigured: Boolean(config.tunnelToken),
+        pilot: pilotAccessStatus(config.oauth.pilot),
+        pilotRemoteConfigured: Boolean(config.oauth.pilotRemote),
+      };
+    } catch (error) {
+      report.configError = error instanceof Error ? error.message : String(error);
+      report.ok = false;
+    }
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.ok) process.exitCode = 1;
+    return;
+  }
   console.log(`搭手 ${version()}`);
   console.log(`配置目录：${files.dir}`);
   console.log(`配置文件：${files.configExists ? "正常" : "缺失"}`);
   console.log(`授权文件：${files.authExists ? "正常" : "缺失"}`);
   console.log(`Node：${process.version}`);
+  console.log(formatRuntimeContract(runtime));
   console.log(`平台：${process.platform} ${process.arch}`);
   console.log(`Bash：${checkCommand("bash", ["--version"])}`);
   console.log(`Git：${checkCommand("git", ["--version"])}`);
@@ -188,9 +292,38 @@ function doctor(): void {
     console.log(`授权目录：${config.allowedRoots.join(", ")}`);
     console.log(`Cloudflare Tunnel：${config.tunnelToken ? "已配置" : "未配置"}`);
     console.log(`cloudflared：${cloudflaredVersion() ?? "不可用"}`);
-    console.log("工具：open_project, read, write, edit, execute");
+    const pilot = pilotAccessStatus(config.oauth.pilot);
+    console.log(`受控试用：${pilot.allowed ? "可用" : `不可用（${pilot.reason}）`}${pilot.expiresAt ? `，到期 ${pilot.expiresAt}` : ""}`);
+    console.log(`工具：${capabilities.tools.join(", ")}`);
   } catch (error) {
     console.log(`配置状态：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function upgrade(args: string[]): Promise<void> {
+  const apply = args.includes("--apply");
+  const check = args.includes("--check");
+  if (args.some((arg) => !["--check", "--apply"].includes(arg)) || (apply && check)) {
+    throw new Error("用法：dashou upgrade --check 或 dashou upgrade --apply");
+  }
+  const manifestUrl = updateManifestUrl();
+  const platform = updatePlatform();
+  try {
+    const manifest = await fetchUpdateManifest(manifestUrl);
+    const result = updateCheck(version(), manifest, manifestUrl, platform);
+    console.log(JSON.stringify(result, null, 2));
+    if (result.updateAvailable) {
+      console.log(`\n发现新版本 ${result.latestVersion}。请使用 GitHub Release 中的受信任安装包升级。`);
+      if (result.downloadUrl) console.log(`下载：${result.downloadUrl}`);
+      if (apply) {
+        await installCliUpdate(result);
+        console.log("已完成 CLI 升级，请重新打开终端后运行 dashou --version 确认。");
+      }
+    } else {
+      console.log("当前已是最新版本。");
+    }
+  } catch (error) {
+    throw new Error(`无法检查 GitHub 更新：${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -221,8 +354,12 @@ function printHelp(): void {
     "  dashou init            选择授权目录并配置连接",
     "  dashou serve           启动本地 MCP 服务",
     "  dashou doctor          检查环境与配置",
+    "  dashou doctor --json   输出机器可读诊断和能力契约",
     "  dashou config get      查看配置",
     "  dashou config set publicBaseUrl <url>",
+    "  dashou upgrade --check 检查 GitHub 客户端更新",
+    "  dashou upgrade --apply 下载并校验后升级 CLI",
+    "  dashou pilot-control 启动内测账号控制面",
     "  dashou -v              查看版本",
     "",
     "V0 只暴露：open_project / read / write / edit / execute",
@@ -252,13 +389,16 @@ function version(): string {
   return pkg.version;
 }
 
-function assertSupportedNode(): void {
-  const [majorText, minorText] = process.versions.node.split(".");
-  const major = Number(majorText);
-  const minor = Number(minorText);
-  const supported = (major === 22 && minor >= 19) || (major > 22 && major < 27);
-  if (!supported) {
-    throw new Error(`搭手需要 Node >=22.19 <27，当前版本 ${process.version}`);
+function assertSupportedRuntime(): void {
+  const report = runtimeContractReport();
+  if (!report.ok) {
+    throw new Error([
+      "搭手运行环境不匹配。",
+      "",
+      formatRuntimeContract(report),
+      "",
+      "请使用同一套 Node 的 node/npm/npx 后重新安装依赖或 CLI。",
+    ].join("\n"));
   }
 }
 

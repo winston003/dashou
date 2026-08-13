@@ -11,6 +11,7 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
 import { JsonOAuthClientsStore, JsonOAuthStore } from "./dashou-oauth-store.js";
+import { createPilotAccessGate, type DashouPilotAccessGate, type DashouPilotPolicy } from "./dashou-pilot-policy.js";
 
 export interface OAuthConfig {
   ownerToken: string;
@@ -18,6 +19,8 @@ export interface OAuthConfig {
   refreshTokenTtlSeconds: number;
   scopes: string[];
   allowedRedirectHosts: string[];
+  pilot?: DashouPilotPolicy;
+  pilotRemote?: import("./dashou-pilot-policy.js").DashouPilotRemoteConfig;
 }
 
 interface AuthorizationCodeRecord {
@@ -116,15 +119,18 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
   private readonly codes = new Map<string, AuthorizationCodeRecord>();
   private readonly oauthStore: JsonOAuthStore;
   private readonly resourceServerUrl: URL;
+  private readonly pilotGate: DashouPilotAccessGate;
 
   constructor(
     private readonly config: OAuthConfig,
     resourceServerUrl: URL,
     stateDir: string,
+    pilotGate?: DashouPilotAccessGate,
   ) {
     this.resourceServerUrl = resourceUrlFromServerUrl(resourceServerUrl);
     this.oauthStore = new JsonOAuthStore(stateDir);
     this.clientsStore = new JsonOAuthClientsStore(this.oauthStore, config.allowedRedirectHosts);
+    this.pilotGate = pilotGate ?? createPilotAccessGate(config.pilot, config.pilotRemote, { stateDir });
   }
 
   async authorize(
@@ -132,6 +138,8 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     params: AuthorizationParams,
     res: Response,
   ): Promise<void> {
+    const access = this.pilotGate.status();
+    if (!access.allowed) throw new AccessDeniedError(`搭手试用不可用：${access.reason}`);
     if (!params.resource || !checkResourceAllowed({ requestedResource: params.resource, configuredResource: this.resourceServerUrl })) {
       throw new InvalidRequestError("Invalid or missing OAuth resource");
     }
@@ -184,6 +192,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     client: OAuthClientInformationFull,
     authorizationCode: string,
   ): Promise<string> {
+    this.requirePilotAccess();
     const record = this.validCodeRecord(client, authorizationCode);
     return record.params.codeChallenge;
   }
@@ -195,6 +204,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     redirectUri?: string,
     resource?: URL,
   ): Promise<OAuthTokens> {
+    this.requirePilotAccess();
     const record = this.validCodeRecord(client, authorizationCode);
     if (redirectUri && redirectUri !== record.params.redirectUri) {
       throw new InvalidGrantError("redirect_uri does not match the authorization request");
@@ -213,6 +223,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     scopes?: string[],
     resource?: URL,
   ): Promise<OAuthTokens> {
+    this.requirePilotAccess();
     const refreshTokenHash = hashToken(refreshToken);
     const record = this.oauthStore.getRefreshToken(refreshTokenHash);
     if (!record || record.clientId !== client.client_id || record.expiresAt < Math.floor(Date.now() / 1000)) {
@@ -236,6 +247,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
+    this.requirePilotAccess(InvalidTokenError);
     const record = this.oauthStore.getAccessToken(hashToken(token));
     if (!record || record.expiresAt < Math.floor(Date.now() / 1000)) {
       throw new InvalidTokenError("Invalid or expired access token");
@@ -258,6 +270,15 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
 
   close(): void {
     this.oauthStore.close();
+  }
+
+  private requirePilotAccess(
+    ErrorType: typeof AccessDeniedError | typeof InvalidTokenError = AccessDeniedError,
+  ): void {
+    const access = this.pilotGate.status();
+    if (!access.allowed) {
+      throw new ErrorType(`搭手试用不可用：${access.reason}`);
+    }
   }
 
   private validCodeRecord(

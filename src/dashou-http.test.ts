@@ -8,6 +8,7 @@ import test from "node:test";
 import type { AddressInfo } from "node:net";
 import { closeHttpServer, createDashouServer } from "./dashou-server.js";
 import type { DashouConfig } from "./dashou-config.js";
+import { dashouVersion } from "./dashou-capabilities.js";
 
 test("HTTP server exposes health and OAuth discovery and protects MCP", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "dashou-http-"));
@@ -32,6 +33,7 @@ test("HTTP server exposes health and OAuth discovery and protects MCP", async (t
     },
   };
   const running = createDashouServer(config);
+  assert.equal(running.app.get("trust proxy"), false);
   const httpServer = running.app.listen(port, config.host);
   t.after(async () => {
     await closeHttpServer(httpServer, running.close);
@@ -40,7 +42,22 @@ test("HTTP server exposes health and OAuth discovery and protects MCP", async (t
 
   const health = await fetch(`${baseUrl}/healthz`);
   assert.equal(health.status, 200);
-  assert.deepEqual(await health.json(), { ok: true, name: "dashou", version: "0.1.0" });
+  assert.deepEqual(await health.json(), {
+    ok: true,
+    name: "dashou",
+    version: dashouVersion(),
+    pilot: { allowed: true, reason: "enabled" },
+  });
+
+  const capabilities = await fetch(`${baseUrl}/capabilities`);
+  assert.equal(capabilities.status, 200);
+  assert.deepEqual(await capabilities.json(), {
+    name: "dashou",
+    version: dashouVersion(),
+    protocol: "streamable-http",
+    oauth: true,
+    tools: ["open_project", "read", "write", "edit", "execute"],
+  });
 
   const protectedMetadata = await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`);
   assert.equal(protectedMetadata.status, 200);
@@ -216,6 +233,128 @@ test("OAuth + Streamable HTTP works end to end like a remote MCP host", async (t
   const tools = (toolsPayload.result as { tools?: Array<{ name: string }> })?.tools ?? [];
   assert.deepEqual(tools.map((tool) => tool.name).sort(), ["edit", "execute", "open_project", "read", "write"]);
 });
+
+test("shutdown closes an active Streamable HTTP SSE connection", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "dashou-http-sse-shutdown-"));
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const config: DashouConfig = {
+    host: "127.0.0.1",
+    port,
+    allowedRoots: [root],
+    allowedHosts: ["127.0.0.1", "localhost"],
+    publicBaseUrl: baseUrl,
+    stateDir: join(root, ".state"),
+    trustProxy: false,
+    oauth: {
+      ownerToken: "test-owner-token-that-is-long-enough",
+      accessTokenTtlSeconds: 3600,
+      refreshTokenTtlSeconds: 86400,
+      scopes: ["dashou"],
+      allowedRedirectHosts: ["chatgpt.com", "localhost", "127.0.0.1"],
+    },
+  };
+  const running = createDashouServer(config);
+  const httpServer = running.app.listen(port, config.host);
+  t.after(async () => {
+    await closeHttpServer(httpServer, running.close);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const { accessToken, sessionId } = await establishSession(baseUrl, config.oauth.ownerToken);
+  const sse = await fetch(`${baseUrl}/mcp`, {
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      accept: "text/event-stream",
+      "mcp-session-id": sessionId,
+    },
+  });
+  assert.equal(sse.status, 200);
+  assert.match(sse.headers.get("content-type") ?? "", /text\/event-stream/);
+  const reader = sse.body?.getReader();
+  assert.ok(reader);
+
+  const pendingRead = reader.read();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const shutdown = closeHttpServer(httpServer, running.close);
+  const shutdownResult = await Promise.race([
+    shutdown.then(() => "closed" as const),
+    new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 2_000)),
+  ]);
+  assert.equal(shutdownResult, "closed");
+  const finalRead = await Promise.race([
+    pendingRead,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("SSE stream did not close")), 2_000)),
+  ]);
+  assert.equal(finalRead.done, true);
+});
+
+async function establishSession(baseUrl: string, ownerToken: string): Promise<{ accessToken: string; sessionId: string }> {
+  const redirectUri = "http://127.0.0.1/callback";
+  const registration = await fetch(`${baseUrl}/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_name: "SSE shutdown test",
+      redirect_uris: [redirectUri],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    }),
+  });
+  const { client_id: clientId } = await registration.json() as { client_id: string };
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+    scope: "dashou",
+    resource: `${baseUrl}/mcp`,
+  });
+  const approval = await fetch(`${baseUrl}/authorize`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ ...Object.fromEntries(params), owner_token: ownerToken }),
+  });
+  assert.equal(approval.status, 302);
+  const callback = new URL(approval.headers.get("location") ?? "");
+  const tokenResponse = await fetch(`${baseUrl}/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      code: callback.searchParams.get("code") ?? "",
+      code_verifier: verifier,
+      redirect_uri: redirectUri,
+      resource: `${baseUrl}/mcp`,
+    }),
+  });
+  const { access_token: accessToken } = await tokenResponse.json() as { access_token: string };
+  const initialize = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "sse-test", version: "1.0.0" } },
+    }),
+  });
+  assert.equal(initialize.status, 200);
+  assert.ok(await initialize.text());
+  const sessionId = initialize.headers.get("mcp-session-id");
+  assert.ok(sessionId);
+  return { accessToken, sessionId };
+}
 
 async function rpcPayload(response: Response): Promise<Record<string, unknown>> {
   const body = await response.text();
