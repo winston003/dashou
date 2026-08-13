@@ -14,7 +14,7 @@ const packageJson = JSON.parse(await readFile(join(repoRoot, "package.json"), "u
 const windows = process.platform === "win32";
 const nodeName = windows ? "node.exe" : "node";
 const cloudflaredName = windows ? "cloudflared.exe" : "cloudflared";
-const npmCommand = windows ? "npm.cmd" : "npm";
+const npmExecPath = process.env.npm_execpath;
 const nodeSource = process.env.DASHOU_NODE_BINARY || process.execPath;
 const cloudflaredUrl = process.env.DASHOU_CLOUDFLARED_URL;
 const expectedCloudflaredSha256 = process.env.DASHOU_CLOUDFLARED_SHA256?.trim().toLowerCase();
@@ -75,7 +75,12 @@ try {
     type: packageJson.type,
     dependencies: packageJson.dependencies,
   }, null, 2) + "\n");
-  execFileSync(npmCommand, ["install", "--prefix", runtimeDir, "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: repoRoot, stdio: "inherit" });
+  const npmArgs = ["install", "--prefix", runtimeDir, "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"];
+  execFileSync(
+    npmExecPath ? process.execPath : (windows ? "npm.exe" : "npm"),
+    npmExecPath ? [npmExecPath, ...npmArgs] : npmArgs,
+    { cwd: repoRoot, stdio: "inherit" },
+  );
 
   console.log(JSON.stringify({
     ok: true,
