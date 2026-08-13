@@ -142,12 +142,11 @@ jobs:
           mac_x64_archive="$(find downloaded/macos-x64 -type f -name 'Dashou.app.tar.gz' -print -quit)"
           mac_x64_signature="${mac_x64_archive}.sig"
           mac_x64_dmg="$(find downloaded/macos-x64 -type f -name '*.dmg' -print -quit)"
-          windows_archive="$(find downloaded/windows -type f -name '*.nsis.zip' -print -quit)"
-          windows_signature="${windows_archive}.sig"
           windows_installer="$(find downloaded/windows -type f -name '*.exe' -print -quit)"
+          windows_signature="${windows_installer}.sig"
           test -n "$mac_arm64_archive" -a -f "$mac_arm64_signature" -a -n "$mac_arm64_dmg"
           test -n "$mac_x64_archive" -a -f "$mac_x64_signature" -a -n "$mac_x64_dmg"
-          test -n "$windows_archive" -a -f "$windows_signature" -a -n "$windows_installer"
+          test -n "$windows_installer" -a -f "$windows_signature"
           mkdir -p release-assets
           cp "$mac_arm64_archive" "release-assets/dashou-${version}-darwin-aarch64.app.tar.gz"
           cp "$mac_arm64_signature" "release-assets/dashou-${version}-darwin-aarch64.app.tar.gz.sig"
@@ -155,25 +154,26 @@ jobs:
           cp "$mac_x64_archive" "release-assets/dashou-${version}-darwin-x86_64.app.tar.gz"
           cp "$mac_x64_signature" "release-assets/dashou-${version}-darwin-x86_64.app.tar.gz.sig"
           cp "$mac_x64_dmg" "release-assets/dashou-${version}-darwin-x86_64.dmg"
-          cp "$windows_archive" "release-assets/dashou-${version}-windows-x86_64.nsis.zip"
-          cp "$windows_signature" "release-assets/dashou-${version}-windows-x86_64.nsis.zip.sig"
           cp "$windows_installer" "release-assets/dashou-${version}-windows-x86_64-setup.exe"
+          cp "$windows_signature" "release-assets/dashou-${version}-windows-x86_64-setup.exe.sig"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Generate Tauri updater manifest
         env:
           DASHOU_RELEASE_VERSION: ${{ steps.release.outputs.version }}
-          DASHOU_RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}
+          DASHOU_RELEASE_BASE_URL: https://github.com/winston003/dashou-releases/releases/download/desktop-${{ steps.release.outputs.version }}
           DASHOU_MAC_ARM64_ARCHIVE: release-assets/dashou-${{ steps.release.outputs.version }}-darwin-aarch64.app.tar.gz
           DASHOU_MAC_ARM64_SIGNATURE: release-assets/dashou-${{ steps.release.outputs.version }}-darwin-aarch64.app.tar.gz.sig
           DASHOU_MAC_X64_ARCHIVE: release-assets/dashou-${{ steps.release.outputs.version }}-darwin-x86_64.app.tar.gz
           DASHOU_MAC_X64_SIGNATURE: release-assets/dashou-${{ steps.release.outputs.version }}-darwin-x86_64.app.tar.gz.sig
-          DASHOU_WINDOWS_ARCHIVE: release-assets/dashou-${{ steps.release.outputs.version }}-windows-x86_64.nsis.zip
-          DASHOU_WINDOWS_SIGNATURE: release-assets/dashou-${{ steps.release.outputs.version }}-windows-x86_64.nsis.zip.sig
+          DASHOU_WINDOWS_ARCHIVE: release-assets/dashou-${{ steps.release.outputs.version }}-windows-x86_64-setup.exe
+          DASHOU_WINDOWS_SIGNATURE: release-assets/dashou-${{ steps.release.outputs.version }}-windows-x86_64-setup.exe.sig
           DASHOU_UPDATER_MANIFEST_PATH: release-assets/latest.json
         run: node desktop/scripts/create-updater-manifest.mjs
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          repository: winston003/dashou-releases
+          tag_name: desktop-${{ steps.release.outputs.version }}
+          token: ${{ secrets.DASHOU_RELEASES_TOKEN }}
           generate_release_notes: true
           files: release-assets/*
