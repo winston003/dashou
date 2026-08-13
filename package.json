@@ -1,6 +1,6 @@
 {
   "name": "@warmbyte/dashou",
-  "version": "0.1.2-rc3",
+  "version": "0.1.2-rc4",
   "description": "让 ChatGPT 安全地读取、修改并执行你授权的本地项目。",
   "type": "module",
   "main": "dist/dashou-server.js",
