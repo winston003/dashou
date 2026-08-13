@@ -1,6 +1,6 @@
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const ACCOUNT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
-const CONTROL_PLANE_VERSION = "0.1.2-rc1";
+const CONTROL_PLANE_VERSION = "0.1.2-rc2";
 const DEFAULT_LEASE_TTL_SECONDS = 15 * 60;
 
 export default {

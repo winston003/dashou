@@ -19,7 +19,7 @@ To stage the runtime resources and build a local bundle:
 
 The build intentionally stops until a real Tauri updater public key is configured. Configure it only in the release environment using desktop/scripts/configure-release.mjs; never commit the updater private key.
 
-The CI workflow builds separate macOS Apple Silicon and Intel `.app`/DMG artifacts plus a Windows NSIS installer. The macOS `.app` target is also required for Tauri updater artifacts. It downloads the pinned official Cloudflare 2026.6.1 release asset and verifies the SHA-256 of the executable that is staged into the bundle. It requires the Tauri updater signing secret; Apple Developer ID/notarization and Windows Authenticode secrets are optional for controlled pilot builds but required before broad public distribution.
+The CI workflow builds separate macOS Apple Silicon and Intel `.app`/DMG artifacts plus a Windows NSIS installer. The macOS `.app` target is also required for Tauri updater artifacts. It downloads the pinned official Cloudflare 2026.6.1 release asset and verifies the SHA-256 of the executable that is staged into the bundle. The updater artifacts are signed by the Tauri updater key. Controlled pilot builds may be ad-hoc/unsigned at the platform level; Apple Developer ID/notarization and Windows Authenticode secrets are required before broad public distribution.
 
 Once a signed desktop release is published, the app checks for updates in the background at launch and every six hours. A user can also press “检查更新”; all updater downloads are verified by Tauri signatures before relaunch.
 

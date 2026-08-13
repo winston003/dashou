@@ -29,18 +29,12 @@ jobs:
           DASHOU_CLOUDFLARED_URL: https://github.com/cloudflare/cloudflared/releases/download/2026.6.1/cloudflared-darwin-arm64.tgz
           DASHOU_CLOUDFLARED_SHA256: ae6ee90188ae5833c687ce937c3693e28403677607c06c65a2ff2b6a022f50e4
         run: npm run stage --prefix desktop
-      - name: Build signed installer
+      - name: Build updater-signed installer
         env:
           DASHOU_CLOUDFLARED_URL: https://github.com/cloudflare/cloudflared/releases/download/2026.6.1/cloudflared-darwin-arm64.tgz
           DASHOU_CLOUDFLARED_SHA256: ae6ee90188ae5833c687ce937c3693e28403677607c06c65a2ff2b6a022f50e4
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri:build --prefix desktop -- --bundles app,dmg
       - uses: actions/upload-artifact@v4
         with:
@@ -66,18 +60,12 @@ jobs:
           DASHOU_CLOUDFLARED_URL: https://github.com/cloudflare/cloudflared/releases/download/2026.6.1/cloudflared-darwin-amd64.tgz
           DASHOU_CLOUDFLARED_SHA256: 3f74d697045ecf56dd2fbeb42f59767ecdf4067c409d55f080563923e8a1bb32
         run: npm run stage --prefix desktop
-      - name: Build signed installer
+      - name: Build updater-signed installer
         env:
           DASHOU_CLOUDFLARED_URL: https://github.com/cloudflare/cloudflared/releases/download/2026.6.1/cloudflared-darwin-amd64.tgz
           DASHOU_CLOUDFLARED_SHA256: 3f74d697045ecf56dd2fbeb42f59767ecdf4067c409d55f080563923e8a1bb32
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri:build --prefix desktop -- --bundles app,dmg
       - uses: actions/upload-artifact@v4
         with:
@@ -104,14 +92,12 @@ jobs:
           DASHOU_CLOUDFLARED_URL: https://github.com/cloudflare/cloudflared/releases/download/2026.6.1/cloudflared-windows-amd64.exe
           DASHOU_CLOUDFLARED_SHA256: 5253e66f1f493c4e13539749f1aa86fd0c61e3072900fec29a44ba046a6d97e2
         run: npm run stage --prefix desktop
-      - name: Build signed installer
+      - name: Build updater-signed installer
         env:
           DASHOU_CLOUDFLARED_URL: https://github.com/cloudflare/cloudflared/releases/download/2026.6.1/cloudflared-windows-amd64.exe
           DASHOU_CLOUDFLARED_SHA256: 5253e66f1f493c4e13539749f1aa86fd0c61e3072900fec29a44ba046a6d97e2
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY_PASSWORD }}
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: npm run tauri:build --prefix desktop -- --bundles nsis
       - uses: actions/upload-artifact@v4
         with:
