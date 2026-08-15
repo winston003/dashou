@@ -1422,7 +1422,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.2-rc10".into(),
+            version: "0.1.2-rc11".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
