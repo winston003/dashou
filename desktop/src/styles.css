@@ -20,11 +20,36 @@ button.primary { border-color: #9b6339; background: #9b6339; color: white; }
 .path-picker { display: flex; gap: 8px; align-items: center; }
 .path-picker input { flex: 1; min-width: 0; }
 .path-picker button { flex: 0 0 auto; margin-top: 7px; }
+.setup-step { display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: center; margin-top: 16px; padding: 14px 0; border-top: 1px solid #eee6db; }
+.step-number { display: grid; width: 25px; height: 25px; place-items: center; border-radius: 50%; background: #f0e2d2; color: #8d5c38; font-size: 12px; font-weight: 750; }
+.step-copy { display: grid; gap: 3px; min-width: 0; color: #4d463e; font-size: 13px; }
+.step-copy span { color: #81776c; font-size: 12px; font-weight: 400; }
+.setup-step button { margin-top: 0; white-space: nowrap; }
+.setup-step .roots-picker { grid-column: 2 / 4; min-width: 0; }
+.roots-picker { display: grid; gap: 8px; }
+.roots-list { display: grid; gap: 7px; }
+.roots-empty { margin: 0; padding: 11px 12px; border: 1px dashed #d8cec0; border-radius: 9px; color: #948b81; font-size: 12px; }
+.root-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 10px; border: 1px solid #e6ddd0; border-radius: 9px; background: #fffdf9; }
+.root-row code { flex: 1; min-width: 0; max-width: none; overflow: hidden; color: #4a4037; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.remove-root { flex: 0 0 auto; margin: 0; padding: 4px 8px; border-color: transparent; background: transparent; color: #a43e32; font-size: 12px; }
+.remove-root:hover { background: #f8e8e2; }
+.setup-status { color: #a43e32 !important; }
+.setup-status.ready { color: #4d8a59 !important; }
+.setup-status.waiting { color: #9a6a2d !important; }
+.invite-fallback { margin-top: 18px; color: #81776c; font-size: 12px; }
+.invite-fallback summary { cursor: pointer; }
+.invite-fallback p { margin: 8px 0 0; }
+.invite-fallback button { margin-top: 10px; }
+button:disabled { cursor: not-allowed; opacity: .45; }
 .advanced { margin-top: 20px; color: #4d463e; font-size: 13px; }
 .advanced summary { cursor: pointer; font-weight: 650; }
 .advanced label { margin-top: 17px; }
-.actions { display: flex; gap: 10px; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.primary-actions { margin-top: 4px; }
 .actions button { margin-top: 18px; }
+.more-actions { margin-top: 18px; color: #6d5c4b; font-size: 13px; }
+.more-actions summary { cursor: pointer; }
+.more-actions .actions { margin-top: -2px; }
 .hidden { display: none; }
 .muted { color: #948b81; font-weight: 400; }
 .error { min-height: 1.2em; color: #a43e32; }

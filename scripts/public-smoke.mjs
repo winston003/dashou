@@ -2,7 +2,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
@@ -19,6 +19,7 @@ let tunnelProcess;
 try {
   await mkdir(project, { recursive: true });
   await writeFile(join(project, "notes.txt"), "before public smoke\n", "utf8");
+  const canonicalRoot = await realpath(root);
 
   tunnelProcess = spawn("cloudflared", [
     "tunnel", "--no-autoupdate", "--protocol", "http2", "--loglevel", "info",
@@ -47,14 +48,20 @@ try {
   const health = await jsonRequest("GET", `${publicUrl}/healthz`);
   const capabilities = await jsonRequest("GET", `${publicUrl}/capabilities`);
   assert(health.ok === true && health.version, "public health check failed");
-  assert(JSON.stringify(capabilities.tools) === JSON.stringify(["open_project", "read", "write", "edit", "execute"]), "public capabilities are not the five-tool contract");
+  assert(JSON.stringify(capabilities.tools) === JSON.stringify(["list_projects", "open_project", "read", "write", "edit", "execute"]), "public capabilities are not the six-tool contract");
 
   const oauthClient = await registerClient(publicUrl);
   const accessToken = await authorize(publicUrl, oauthClient, ownerToken);
   const sessionId = await initializeMcp(publicUrl, accessToken);
   const tools = await mcpCall(publicUrl, accessToken, sessionId, "tools/list", {});
   const toolNames = (tools.result?.tools ?? []).map((tool) => tool.name).sort();
-  assert(JSON.stringify(toolNames) === JSON.stringify(["edit", "execute", "open_project", "read", "write"]), "public MCP tools are not the five-tool contract");
+  assert(JSON.stringify(toolNames) === JSON.stringify(["edit", "execute", "list_projects", "open_project", "read", "write"]), "public MCP tools are not the six-tool contract");
+
+  const listed = await mcpCall(publicUrl, accessToken, sessionId, "tools/call", {
+    name: "list_projects",
+    arguments: {},
+  });
+  assert((listed.result?.structuredContent?.projects ?? []).some((entry) => entry.path === canonicalRoot && entry.available === true), "public list_projects did not return the authorized root");
 
   const opened = await mcpCall(publicUrl, accessToken, sessionId, "tools/call", {
     name: "open_project",

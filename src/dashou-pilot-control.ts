@@ -153,7 +153,7 @@ export interface DashouPilotControlRouterOptions {
 
 /**
  * Small control-plane surface for an internal pilot. It is intentionally
- * separate from the five MCP tools and stores account tokens only as hashes.
+ * separate from the six MCP tools and stores account tokens only as hashes.
  */
 export function registerPilotControlRoutes(
   app: { get(path: string, handler: (request: Request, response: Response) => unknown): unknown; post(path: string, handler: (request: Request, response: Response) => unknown): unknown },

@@ -15,7 +15,7 @@ if (mcpUrl.pathname.replace(/\/+$/, "") !== "/mcp") {
 }
 
 const oauth = await obtainAccessToken(mcpUrl, ownerToken);
-const allowedTools = ["open_project", "read", "write", "edit", "execute"];
+const allowedTools = ["list_projects", "open_project", "read", "write", "edit", "execute"];
 const tool = {
   type: "mcp",
   server_label: "dashou",
@@ -23,16 +23,17 @@ const tool = {
   server_url: mcpUrl.href,
   authorization: oauth.accessToken,
   allowed_tools: allowedTools,
-  require_approval: { never: { tool_names: ["open_project", "read"] } },
+  require_approval: { never: { tool_names: ["list_projects", "open_project", "read"] } },
 };
 
 const readResponse = await createResponse({
   model,
   tools: [tool],
-  input: `Use Dashou tools, not a prose-only answer. Open the authorized project at ${projectPath} and read ${readPath}. Report the first line.`,
+  input: `Use Dashou tools, not a prose-only answer. First call list_projects, then open the authorized project at ${projectPath} and read ${readPath}. Report the first line.`,
 });
 assertToolList(readResponse, allowedTools);
 const readCalls = mcpCalls(readResponse);
+assert(readCalls.some((call) => call.name === "list_projects"), "OpenAI response did not call list_projects");
 assert(readCalls.some((call) => call.name === "open_project"), "OpenAI response did not call open_project");
 assert(readCalls.some((call) => call.name === "read"), "OpenAI response did not call read");
 

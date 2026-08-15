@@ -1,39 +1,98 @@
 # Dashou pilot control plane
 
-这是首批内测用的最小 Cloudflare Worker + D1 控制面。它只负责账号试用开关和短期 signed lease：创建账号、发放一次性账号 token、启用/禁用、修改到期时间和撤销。
+Cloudflare Worker + D1 控制面负责设备申请、管理员审核、授权周期、独立 Tunnel/DNS、短期 signed lease 与撤销。正常用户流程不再需要管理员生成邀请文件。
 
-## 部署
+## 用户与管理员流程
 
-```bash
-npx wrangler d1 create dashou-pilot-control
-# 将命令输出的 database_id 写入 wrangler.jsonc
-npx wrangler d1 migrations apply dashou-pilot-control --remote
-npx wrangler secret put PILOT_ADMIN_TOKEN
-npx wrangler secret put PILOT_LEASE_PRIVATE_KEY
-npx wrangler deploy
+```text
+用户安装桌面端 → 点击申请开通 → 管理员 CLI 审核
+→ Worker 为该设备准备独立 Tunnel 和子域名
+→ 桌面端自动领取并保存配置 → 用户连接 ChatGPT
 ```
 
-`PILOT_ADMIN_TOKEN` 只通过 Wrangler secret 注入。数据库只存用户 token 的 SHA-256 hash，创建接口返回的明文 token 只显示一次。
+连接密码只在桌面端本地生成，Worker 不接收、不保存。设备申请凭据和试用账号 token 在 D1 中只存 SHA-256；待领取的 Tunnel/试用凭据使用 AES-256-GCM 暂存，桌面端保存成功后会确认清除。
 
-部署前先执行：
+## 首次部署
+
+先确认 Cloudflare 身份与目标账号：
 
 ```bash
-npx wrangler deploy --dry-run
+npx wrangler whoami
+npx wrangler d1 migrations apply dashou-pilot-control --remote --config control-plane/wrangler.jsonc
 ```
 
-然后用管理员 token 调用 `POST /admin/pilot/accounts` 创建账号。把响应里的 `token` 配置到 Dashou 客户端的 `DASHOU_PILOT_POLICY_TOKEN`，把 Worker 的 RSA 公钥配置到 `DASHOU_PILOT_POLICY_PUBLIC_KEY`，并把 `/pilot-policy` 配置到 `DASHOU_PILOT_POLICY_URL`。Worker 返回的 lease 使用 RSA-PSS/SHA-256 签名，默认有效期最多 15 分钟；账号更早到期时取账号到期时间。
-
-仓库根目录还提供简单管理命令：
+配置 Worker secrets：
 
 ```bash
-export DASHOU_PILOT_CONTROL_URL=https://dashou-pilot-control.whilewon.workers.dev
+npx wrangler secret put PILOT_ADMIN_TOKEN --config control-plane/wrangler.jsonc
+npx wrangler secret put PILOT_LEASE_PRIVATE_KEY --config control-plane/wrangler.jsonc
+npx wrangler secret put PILOT_LEASE_PUBLIC_KEY --config control-plane/wrangler.jsonc
+npx wrangler secret put DASHOU_ACTIVATION_KEY --config control-plane/wrangler.jsonc
+npx wrangler secret put CLOUDFLARE_API_TOKEN --config control-plane/wrangler.jsonc
+npx wrangler secret put CLOUDFLARE_ACCOUNT_ID --config control-plane/wrangler.jsonc
+npx wrangler secret put CLOUDFLARE_ZONE_ID --config control-plane/wrangler.jsonc
+npx wrangler secret put DASHOU_PUBLIC_DOMAIN --config control-plane/wrangler.jsonc
+```
+
+`DASHOU_ACTIVATION_KEY` 是 base64url 编码的 32 字节随机值。可在管理员本机生成后直接送入 Wrangler，不要写入仓库或聊天：
+
+```bash
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+```
+
+Cloudflare API Token 只授予目标账号的 `Cloudflare Tunnel Write` 和目标 zone 的 `DNS Write`。任何拿到设备 Tunnel Token 的人都能运行该 Tunnel，因此 Worker 只向对应设备的高熵申请凭据返回它，并在设备确认后清除暂存密文。
+
+部署前验证：
+
+```bash
+npm run verify:control-plane
+```
+
+真实部署使用仓库脚本；脚本拒绝脏工作树，并把当前提交 SHA 写入健康检查：
+
+```bash
+npm run deploy:control-plane
+```
+
+## 管理员审核
+
+管理员只需在自己的终端配置控制面地址和管理员 token：
+
+```bash
+export DASHOU_PILOT_CONTROL_URL='https://dashou-pilot-control.whilewon.workers.dev'
 export DASHOU_PILOT_CONTROL_ADMIN_TOKEN='只在管理员终端注入'
-npm run pilot:admin -- create pilot-alice 2026-09-01T00:00:00.000Z
-npm run pilot:admin -- disable pilot-alice
-npm run pilot:admin -- enable pilot-alice
-npm run pilot:admin -- revoke pilot-alice
 ```
 
-`create` 响应中的用户 token 只显示一次；不要写入 Git、聊天或共享日志。
+日常命令：
 
-这不是完整的生产账号平台：没有登录页、计费、租户隔离、审计后台或 Tunnel 自动发放。公网部署前仍需单独完成 Cloudflare 认证、域名/SNI、HTTPS、速率限制和日志策略审查。
+```bash
+dashou admin applications list
+dashou admin applications approve req_xxx --period week
+dashou admin applications approve req_xxx --period month
+dashou admin applications approve req_xxx --period quarter
+dashou admin applications approve req_xxx --period year
+dashou admin applications reject req_xxx --reason '请联系客服核对设备'
+dashou admin applications revoke req_xxx
+```
+
+周/月/季/年目前是授权周期，不代表已经发生真实付款。真实计费接入支付提供商后再改变状态来源，设备申请与审批协议无需重做。
+
+## API 边界
+
+设备接口：
+
+- `POST /applications`
+- `GET /applications/:id`
+- `POST /applications/:id/activate`
+- `POST /applications/:id/activate/confirm`
+
+管理员接口：
+
+- `GET /admin/applications?status=pending`
+- `POST /admin/applications/:id/approve`
+- `POST /admin/applications/:id/reject`
+- `POST /admin/applications/:id/revoke`
+
+兼容账号接口仍保留在 `/admin/pilot/accounts`。所有管理员接口只接受 `PILOT_ADMIN_TOKEN` Bearer 凭据。日志不得记录管理员 token、申请凭据、Pilot token、Tunnel Token 或激活密文。
+
+部署上线不等于用户验收。上线后仍要分别验证 D1 migration、Worker `/healthz`、真实 Tunnel/DNS、外部 HTTPS、桌面领取、ChatGPT OAuth 和第一个真实本地任务。

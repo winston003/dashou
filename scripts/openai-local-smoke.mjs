@@ -57,7 +57,7 @@ try {
   };
   const doctor = JSON.parse(execFileSync(cli, ["doctor", "--json"], { env, encoding: "utf8" }));
   assert(doctor.ok === true, `installed Dashou doctor failed: ${JSON.stringify(doctor)}`);
-  assert(JSON.stringify(doctor.capabilities?.tools) === JSON.stringify(["open_project", "read", "write", "edit", "execute"]), "installed package did not report the five-tool contract");
+  assert(JSON.stringify(doctor.capabilities?.tools) === JSON.stringify(["list_projects", "open_project", "read", "write", "edit", "execute"]), "installed package did not report the six-tool contract");
 
   const dashouOutputRef = { value: "" };
   dashouProcess = spawn(cli, ["serve"], { cwd: project, env, stdio: ["ignore", "pipe", "pipe"] });
@@ -66,7 +66,7 @@ try {
   await waitForHealth(`${publicUrl}/healthz`, () => `${dashouOutputRef.value}\n${tunnelOutputRef.value}`);
 
   const oauth = await obtainAccessToken(new URL(`${publicUrl}/mcp`), ownerToken);
-  const allowedTools = ["open_project", "read", "write", "edit", "execute"];
+  const allowedTools = ["list_projects", "open_project", "read", "write", "edit", "execute"];
   const tool = {
     type: "mcp",
     server_label: "dashou",
@@ -74,16 +74,17 @@ try {
     server_url: `${publicUrl}/mcp`,
     authorization: oauth.accessToken,
     allowed_tools: allowedTools,
-    require_approval: { never: { tool_names: ["open_project", "read"] } },
+    require_approval: { never: { tool_names: ["list_projects", "open_project", "read"] } },
   };
 
   const readResponse = await createResponse({
     model,
     tools: [tool],
-    input: `Use Dashou tools, not prose-only instructions. Open the authorized project at ${project} and read notes.txt. Report its first line exactly.`,
+    input: `Use Dashou tools, not prose-only instructions. First call list_projects, then open the authorized project at ${project} and read notes.txt. Report its first line exactly.`,
   });
   assertToolList(readResponse, allowedTools);
   const readCalls = mcpCalls(readResponse);
+  assertCompletedCall(readCalls, "list_projects");
   assertCompletedCall(readCalls, "open_project");
   assertCompletedCall(readCalls, "read");
 

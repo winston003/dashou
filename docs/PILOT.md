@@ -4,22 +4,45 @@
 
 ## 管理员准备
 
-每个内测用户分配一套独立入口：
+管理员只向用户发送官方 GitHub Release 页面。每台电脑的独立子域名、Tunnel 和授权由控制面在批准时自动准备，不再由客服手工创建或传递。
 
-- 一个稳定子域名，例如 `alice.warmbyte.studio`。
-- 一个独立的 Cloudflare remotely-managed Tunnel。
-- Tunnel 的 Public Hostname 指向用户电脑上的 `http://127.0.0.1:7677`。
-- 该 Tunnel 的 token。
+管理员首次部署控制面按 [control-plane/README.md](../control-plane/README.md) 完成。日常审核只需在自己的终端配置一次环境变量：
 
-不要让多个用户共用同一个 Tunnel token。token 只发给对应用户，不写入聊天、Issue 或共享文档。
+```bash
+export DASHOU_PILOT_CONTROL_URL='https://dashou-pilot-control.whilewon.workers.dev'
+export DASHOU_PILOT_CONTROL_ADMIN_TOKEN='只在管理员终端注入'
+```
+
+收到新申请后：
+
+```bash
+dashou admin applications list
+dashou admin applications approve req_xxx --period month
+```
+
+也可以选择 `week`、`quarter` 或 `year`。这些是授权周期，不是假装已经完成支付。拒绝和撤销：
+
+```bash
+dashou admin applications reject req_xxx --reason '请联系客服核对设备'
+dashou admin applications revoke req_xxx
+```
+
+管理员不接触用户的本地连接密码，也不把 Tunnel Token、试用 token 或其他密钥发到聊天里。
 
 ## 用户安装
 
-要求：
+用户只需要四步：
 
-- Node.js >= 22.19 < 27
-- `cloudflared`
-- 可以正常使用 ChatGPT
+1. 从客服发送的 GitHub Release 页面安装 Dashou。
+2. 打开 Dashou，点击“申请开通”；页面会显示“申请已发送，等待管理员同意”。
+3. 管理员批准后，页面自动变为“已开通，可以继续”。用户选择一个或多个工作文件夹，点击“开始使用”。
+4. 点击“去 ChatGPT 连接”。Dashou 会复制连接地址并直接打开 ChatGPT 的连接页面；需要密码时，回到 Dashou 点击“复制授权密码”。
+
+Dashou 会自动复制连接地址并打开 ChatGPT。用户不需要安装 Node.js、`cloudflared`，
+也不需要填写公网地址、内测连接码或 Tunnel Token；ChatGPT 最后的添加和授权仍由用户在
+自己的账号页面确认。授权页需要密码时，回到 Dashou 点击“复制授权密码”即可。
+
+`.dashou-invite.json` 只作为旧版本兼容和故障恢复入口保留，不是正常内测流程。管理员明确要求时，用户才展开“已有管理员邀请文件”并导入。
 
 正式 npm 发布后安装：
 
@@ -48,9 +71,9 @@ npm run verify:pilot
 ```
 
 `verify:pilot` 本身也可以独立执行：它会先生成当前版本的发布包，再验证全新安装、OAuth、
-Streamable HTTP、五个工具和本地操作闭环。
+Streamable HTTP、六个工具和本地操作闭环。
 
-安装完成后，管理员和用户可先检查：
+安装包内已经包含 Node.js 和 `cloudflared`。管理员可在发包前检查：
 
 ```bash
 dashou doctor --json
@@ -63,7 +86,7 @@ dashou upgrade --check
 OPENAI_MCP_AUTO_APPROVE_MUTATIONS=1 OPENAI_API_KEY='由用户自己注入' npm run verify:openai:local
 ```
 
-它会在临时目录安装当前包，启动一次性公网入口，让模型发送消息并完成 `open_project`、`read`、
+它会在临时目录安装当前包，启动一次性公网入口，让模型发送消息并完成 `list_projects`、`open_project`、`read`、
 `write`、`edit`、`execute`，最后核对文件和命令输出。该命令不会触碰用户项目；API key 不要写入
 聊天或日志。结果属于 OpenAI Responses API 证据，不代表 ChatGPT 网页 UI 验收。
 
@@ -73,16 +96,18 @@ OPENAI_MCP_AUTO_APPROVE_MUTATIONS=1 OPENAI_API_KEY='由用户自己注入' npm r
 npm run verify:public
 ```
 
-该命令使用临时 Cloudflare Quick Tunnel 和一次性测试目录，验证公网 HTTPS、OAuth、五个 MCP
+该命令使用临时 Cloudflare Quick Tunnel 和一次性测试目录，验证公网 HTTPS、OAuth、六个 MCP
 工具以及本地读写修改执行；它完成后会自动关闭。结果明确属于兼容 MCP 客户端证据，不等于
 ChatGPT UI 或首个真实用户任务。
 
-`doctor --json` 用于确认运行时、配置、受控试用状态和五工具能力契约；
+`doctor --json` 用于确认运行时、配置、受控试用状态和六工具能力契约；
 `upgrade --check` 只报告 GitHub Release 中是否有新版本，不会自动升级 npm 全局安装。
 它要求 CLI/npm 专用的 `cli-latest.json`；不能直接复用桌面 Tauri 的 `latest.json`。
 如果 CLI 清单尚未发布，检查失败是预期的，并不表示桌面 Release 可用于 CLI。
 确认要升级时运行 `dashou upgrade --apply`；它下载并校验 CLI 专用 tarball 的 SHA-256 后，
 再调用 npm 全局安装。桌面 `latest.json`、DMG 或 `.app.tar.gz` 不会被当作 CLI 包。
+
+以下环境变量与本机控制面只用于 CLI 开发、离线演练和旧邀请文件兼容，不是桌面端正常开通流程。
 
 如果需要限制一个本机内测实例，可设置：
 
@@ -92,8 +117,7 @@ export DASHOU_PILOT_ACCOUNT_ID=pilot-alice
 export DASHOU_PILOT_EXPIRES_AT=2026-09-01T00:00:00.000Z
 ```
 
-这只是本机策略：到期或禁用后 `/healthz`、OAuth 和 MCP 会拒绝访问。`ACCOUNT_ID` 目前
-用于标识和诊断，不代表已经实现远程账号系统、计费、用户隔离、Tunnel 自动发放或撤销。
+这只是本机策略：到期或禁用后 `/healthz`、OAuth 和 MCP 会拒绝访问。正式桌面内测使用 Worker 申请、审批、独立 Tunnel 自动发放和撤销。
 
 如果管理员已有控制面，可改用远程策略：
 
@@ -151,7 +175,7 @@ npm run pilot:admin -- revoke pilot-alice
 
 `.tgz` 是临时分发方式，不需要内测用户拿到源码仓库。
 
-初始化只需要回答四件事：
+如果使用 CLI 方式初始化，才需要回答四件事：
 
 1. ChatGPT 可以访问哪个本地目录。
 2. 本地端口，默认 `7677`。
@@ -175,6 +199,8 @@ dashou serve
 报告运行时不匹配，先按报告修正 Node/npm/npx，再启动服务。服务关闭时会先停止接收新请求，等待已在途
 请求结束后再关闭 OAuth/MCP 状态，便于升级和重启。
 
+桌面包不走这套手写配置；它从申请控制面自动领取公网地址、内测授权和 Tunnel 配置。旧邀请文件只用于兼容与恢复。
+
 ## ChatGPT 连接
 
 MCP URL 为：
@@ -183,11 +209,13 @@ MCP URL 为：
 https://xxx.warmbyte.studio/mcp
 ```
 
-桌面安装包的首次设置使用系统文件夹选择器，不要求用户手写路径。服务准备好后，点击“连接 ChatGPT”会复制 MCP 地址并打开 ChatGPT；用户仍需在 ChatGPT 中粘贴地址，并亲自完成最终 OAuth 授权。也可以分别使用“复制连接地址”和“复制连接密码”。首次连接会打开搭手授权页；用户输入 `dashou init` 生成的连接密码完成 OAuth 授权。
+桌面安装包的首次设置只需要申请开通和添加一个或多个文件夹。服务准备好后，
+点击“去 ChatGPT 连接”会复制连接地址并打开 ChatGPT 官方 Plugins 页面。用户在 ChatGPT 中点击“+”并粘贴地址，随后完成最终添加和授权；授权页需要密码时，回到 Dashou 点击“复制授权密码”再粘贴。若页面没有“+”，在 ChatGPT 的“设置 → 安全与登录”中开启开发者模式；该开关是否可用取决于账号和工作区策略。
 
-连接后模型只能看到五个工具：
+连接后模型只能看到六个工具：
 
 ```text
+list_projects
 open_project
 read
 write
@@ -195,11 +223,11 @@ edit
 execute
 ```
 
-如果出现 Task、Review、Lease、Subagent、Skill 等工具，视为 V0 配置错误。
+如果出现 Task、Review、Lease、Subagent、Skill 等工具，视为 V0 配置错误。`list_projects` 是 V0 的只读项目发现工具。
 
 自动化 smoke 只能证明 Dashou 与兼容 MCP 客户端的协议闭环；它不能替代 ChatGPT
-真实界面的连接、OAuth、工具调用和用户体验验收。真实验收需要可用的 ChatGPT
-Business/Enterprise/Edu 或当前允许连接自定义 MCP 的开发模式账号。
+真实界面的连接、OAuth、工具调用和用户体验验收。真实验收需要账号和工作区当前允许开启
+ChatGPT 开发者模式并连接自定义 MCP。
 
 也可以对一次性测试目录运行 OpenAI Responses API smoke（需要公网 `/mcp` 和用户自己提供的
 `OPENAI_API_KEY`）：
@@ -212,7 +240,7 @@ export OPENAI_API_KEY='由用户自己注入，不要写入聊天或日志'
 npm run verify:openai
 ```
 
-它会验证 `mcp_list_tools` 只有五个工具并发送真实模型消息；写入、修改、执行默认需要 approval。
+它会验证 `mcp_list_tools` 只有六个工具并发送真实模型消息；写入、修改、执行默认需要 approval。
 明确审核过一次性目录后才设置 `OPENAI_MCP_AUTO_APPROVE_MUTATIONS=1`。该证据属于 OpenAI
 Responses API，不冒充 ChatGPT 网页或桌面 UI 验收。
 

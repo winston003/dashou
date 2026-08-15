@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import nodeAssert from "node:assert/strict";
@@ -20,6 +20,7 @@ let serverProcess;
 try {
   await mkdir(project, { recursive: true });
   await writeFile(join(project, "notes.txt"), "before\n", "utf8");
+  const canonicalProject = await realpath(project);
   const packagePath = resolveReleasePackage(repo, packageJson.version);
   assert(packagePath, `final release package is missing: releases/warmbyte-dashou-${packageJson.version}.tgz`);
   const actualPackage = packagePath;
@@ -33,7 +34,7 @@ try {
     ...process.env,
     DASHOU_CONFIG_DIR: configDir,
     DASHOU_STATE_DIR: stateDir,
-    DASHOU_ALLOWED_ROOTS: temp,
+    DASHOU_ALLOWED_ROOTS: project,
     DASHOU_OAUTH_OWNER_TOKEN: ownerToken,
     DASHOU_PUBLIC_BASE_URL: `http://127.0.0.1:${port}`,
     PORT: String(port),
@@ -43,17 +44,20 @@ try {
   const doctor = execFileSync(cli, ["doctor", "--json"], { env, encoding: "utf8" });
   const doctorReport = JSON.parse(doctor);
   assert(doctorReport.ok === true, `doctor failed: ${doctor}`);
-  nodeAssert.deepEqual(doctorReport.capabilities.tools, ["open_project", "read", "write", "edit", "execute"]);
+  nodeAssert.deepEqual(doctorReport.capabilities.tools, ["list_projects", "open_project", "read", "write", "edit", "execute"]);
 
   serverProcess = spawn(cli, ["serve"], { cwd: project, env, stdio: ["ignore", "pipe", "pipe"] });
   await waitForHealth(`http://127.0.0.1:${port}/healthz`);
   const capabilities = await jsonFetch(`http://127.0.0.1:${port}/capabilities`);
-  nodeAssert.deepEqual(capabilities.tools, ["open_project", "read", "write", "edit", "execute"]);
+  nodeAssert.deepEqual(capabilities.tools, ["list_projects", "open_project", "read", "write", "edit", "execute"]);
 
   const client = await oauthClient(`http://127.0.0.1:${port}`, ownerToken);
   const session = await mcpInitialize(client.baseUrl, client.accessToken);
   const tools = await mcpCall(client.baseUrl, client.accessToken, session.id, "tools/list", {});
-  nodeAssert.deepEqual((tools.result?.tools ?? []).map((tool) => tool.name).sort(), ["edit", "execute", "open_project", "read", "write"]);
+  nodeAssert.deepEqual((tools.result?.tools ?? []).map((tool) => tool.name).sort(), ["edit", "execute", "list_projects", "open_project", "read", "write"]);
+
+  const listed = await mcpCall(client.baseUrl, client.accessToken, session.id, "tools/call", { name: "list_projects", arguments: {} });
+  assert((listed.result?.structuredContent?.projects ?? []).some((entry) => entry.path === canonicalProject && entry.available === true), "list_projects did not return the authorized project");
 
   const opened = await mcpCall(client.baseUrl, client.accessToken, session.id, "tools/call", { name: "open_project", arguments: { path: project } });
   const workspaceId = opened.result?.structuredContent?.workspaceId;
@@ -66,7 +70,7 @@ try {
   assert(executed.result?.structuredContent?.stdout === "executed-by-chatgpt-compatible-client", "execute failed");
   nodeAssert.equal(await readFile(join(project, "notes.txt"), "utf8"), "after\n");
   nodeAssert.equal(await readFile(join(project, "created.txt"), "utf8"), "created by ChatGPT-compatible pilot\n");
-  console.log(JSON.stringify({ ok: true, install: "fresh npm package install", oauth: "authorization_code", mcp: "Streamable HTTP", tools: ["open_project", "read", "write", "edit", "execute"], operations: ["read", "write", "edit", "execute"], chatgptBoundary: "ChatGPT-compatible MCP client; run real ChatGPT UI acceptance separately" }, null, 2));
+  console.log(JSON.stringify({ ok: true, install: "fresh npm package install", oauth: "authorization_code", mcp: "Streamable HTTP", tools: ["list_projects", "open_project", "read", "write", "edit", "execute"], operations: ["list_projects", "read", "write", "edit", "execute"], chatgptBoundary: "ChatGPT-compatible MCP client; run real ChatGPT UI acceptance separately" }, null, 2));
 } finally {
   if (serverProcess) {
     serverProcess.kill("SIGTERM");

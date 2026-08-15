@@ -56,7 +56,7 @@ test("HTTP server exposes health and OAuth discovery and protects MCP", async (t
     version: dashouVersion(),
     protocol: "streamable-http",
     oauth: true,
-    tools: ["open_project", "read", "write", "edit", "execute"],
+    tools: ["list_projects", "open_project", "read", "write", "edit", "execute"],
   });
 
   const protectedMetadata = await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`);
@@ -231,7 +231,7 @@ test("OAuth + Streamable HTTP works end to end like a remote MCP host", async (t
   assert.equal(toolsResponse.status, 200);
   const toolsPayload = await rpcPayload(toolsResponse);
   const tools = (toolsPayload.result as { tools?: Array<{ name: string }> })?.tools ?? [];
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["edit", "execute", "open_project", "read", "write"]);
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["edit", "execute", "list_projects", "open_project", "read", "write"]);
 });
 
 test("shutdown closes an active Streamable HTTP SSE connection", async (t) => {

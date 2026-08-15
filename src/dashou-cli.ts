@@ -4,7 +4,8 @@ import { once } from "node:events";
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   expandHome,
   generateOwnerToken,
@@ -27,7 +28,7 @@ import { acquireServeInstanceLock } from "./dashou-single-instance.js";
 const require = createRequire(import.meta.url);
 const DEFAULT_PORT = 7677;
 
-type Command = "serve" | "init" | "doctor" | "config" | "upgrade" | "pilot-control" | "help" | "version";
+type Command = "serve" | "init" | "doctor" | "config" | "upgrade" | "pilot" | "admin" | "pilot-control" | "help" | "version";
 
 async function main(argv: string[]): Promise<void> {
   const [rawCommand, ...args] = argv;
@@ -55,6 +56,12 @@ async function main(argv: string[]): Promise<void> {
     case "upgrade":
       await upgrade(args);
       return;
+    case "pilot":
+      await pilot(args);
+      return;
+    case "admin":
+      await admin(args);
+      return;
     case "pilot-control":
       await pilotControlServe();
       return;
@@ -69,7 +76,7 @@ async function main(argv: string[]): Promise<void> {
 
 function normalizeCommand(command: string | undefined): Command {
   if (!command || command === "serve" || command === "start") return "serve";
-  if (["serve", "init", "doctor", "config", "upgrade", "pilot-control"].includes(command)) return command as Command;
+  if (["serve", "init", "doctor", "config", "upgrade", "pilot", "admin", "pilot-control"].includes(command)) return command as Command;
   if (["help", "--help", "-h"].includes(command)) return "help";
   if (["version", "--version", "-v"].includes(command)) return "version";
   throw new Error(`未知命令：${command}`);
@@ -327,6 +334,28 @@ async function upgrade(args: string[]): Promise<void> {
   }
 }
 
+async function pilot(args: string[]): Promise<void> {
+  const [subcommand, ...inviteArgs] = args;
+  if (subcommand !== "invite") {
+    throw new Error("用法：dashou pilot invite [--interactive] [输出路径]");
+  }
+  const inviteScript = resolve(dirname(fileURLToPath(import.meta.url)), "../scripts/create-pilot-invite.mjs");
+  execFileSync(process.execPath, [inviteScript, ...inviteArgs], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: "inherit",
+  });
+}
+
+async function admin(args: string[]): Promise<void> {
+  const adminScript = resolve(dirname(fileURLToPath(import.meta.url)), "../scripts/pilot-admin.mjs");
+  execFileSync(process.execPath, [adminScript, ...args], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: "inherit",
+  });
+}
+
 function configCommand(args: string[]): void {
   const [subcommand, key, ...rest] = args;
   const files = loadDashouFiles();
@@ -359,10 +388,12 @@ function printHelp(): void {
     "  dashou config set publicBaseUrl <url>",
     "  dashou upgrade --check 检查 GitHub 客户端更新",
     "  dashou upgrade --apply 下载并校验后升级 CLI",
+    "  dashou pilot invite --interactive 生成一份内测邀请文件",
+    "  dashou admin applications list  查看待审核申请",
     "  dashou pilot-control 启动内测账号控制面",
     "  dashou -v              查看版本",
     "",
-    "V0 只暴露：open_project / read / write / edit / execute",
+    "V0 只暴露：list_projects / open_project / read / write / edit / execute",
   ].join("\n"));
 }
 

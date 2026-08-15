@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import test from "node:test";
 import { DashouWorkspaceRegistry } from "./dashou-workspace.js";
 
@@ -26,6 +26,46 @@ test("workspace read/write/edit/execute stays project scoped", async (t) => {
   const command = await registry.execute(workspace.id, "printf dashou");
   assert.equal(command.exitCode, 0);
   assert.equal(command.stdout, "dashou");
+});
+
+test("lists only explicitly authorized project roots", async (t) => {
+  const project = await mkdtemp(join(tmpdir(), "dashou-project-"));
+  const other = await mkdtemp(join(tmpdir(), "dashou-other-"));
+  const missing = join(project, "removed-project");
+  t.after(() => Promise.all([
+    rm(project, { recursive: true, force: true }),
+    rm(other, { recursive: true, force: true }),
+  ]));
+
+  const canonicalProject = await realpath(project);
+  const canonicalOther = await realpath(other);
+  const registry = new DashouWorkspaceRegistry([project, other, missing]);
+  assert.deepEqual(await registry.listProjects(), [
+    { name: basename(canonicalOther), path: canonicalOther, available: true },
+    { name: basename(canonicalProject), path: canonicalProject, available: true },
+    { name: "removed-project", path: missing, available: false },
+  ].sort((left, right) => left.name.localeCompare(right.name) || left.path.localeCompare(right.path)));
+});
+
+test("loads root project instructions and discovers nested instruction files", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "dashou-instructions-"));
+  const project = join(root, "project");
+  await mkdir(join(project, "src", "nested"), { recursive: true });
+  await mkdir(join(project, "node_modules", "ignored"), { recursive: true });
+  await writeFile(join(project, "AGENTS.md"), "Run the project tests before reporting success.\n");
+  await writeFile(join(project, "src", "CLAUDE.md"), "Use the source conventions in this directory.\n");
+  await writeFile(join(project, "node_modules", "ignored", "AGENTS.md"), "Do not load this file.\n");
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const registry = new DashouWorkspaceRegistry([root]);
+  const workspace = await registry.openProject(project);
+
+  assert.deepEqual(workspace.instructions, [{
+    path: "AGENTS.md",
+    content: "Run the project tests before reporting success.\n",
+  }]);
+  assert.deepEqual(workspace.availableInstructionFiles, ["src/CLAUDE.md"]);
+  assert.match(workspace.instructionsDigest, /^[0-9a-f]{64}$/);
 });
 
 test("workspace rejects paths and projects outside approved roots", async (t) => {

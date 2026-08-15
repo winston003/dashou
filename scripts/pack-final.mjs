@@ -25,6 +25,8 @@ for (const required of [
   "package/dist/dashou-cli.js",
   "package/dist/dashou-capabilities.js",
   "package/dist/dashou-server.js",
+  "package/scripts/create-pilot-invite.mjs",
+  "package/scripts/pilot-admin.mjs",
 ]) {
   if (!entries.split("\n").includes(required)) throw new Error(`final package is missing ${required}`);
 }
@@ -51,8 +53,26 @@ try {
   if (version !== packageJson.version) throw new Error(`fresh package returned version ${version}`);
   const doctor = JSON.parse(execFileSync(cli, ["doctor", "--json"], { env, encoding: "utf8" }));
   if (!doctor.ok || doctor.version !== packageJson.version) throw new Error("fresh package doctor failed");
-  if (JSON.stringify(doctor.capabilities?.tools) !== JSON.stringify(["open_project", "read", "write", "edit", "execute"])) {
-    throw new Error("fresh package did not report the five-tool contract");
+  if (JSON.stringify(doctor.capabilities?.tools) !== JSON.stringify(["list_projects", "open_project", "read", "write", "edit", "execute"])) {
+    throw new Error("fresh package did not report the six-tool contract");
+  }
+  const adminHelp = execFileSync(cli, ["admin", "--help"], { cwd: temp, env, encoding: "utf8" });
+  if (!adminHelp.includes("dashou admin applications approve")) {
+    throw new Error("fresh package did not expose the application review CLI");
+  }
+  const invitePath = join(temp, "pilot-invite.json");
+  execFileSync(cli, ["pilot", "invite", invitePath], {
+    env: {
+      ...env,
+      DASHOU_INVITE_PUBLIC_URL: "https://pilot.example.invalid",
+      DASHOU_INVITE_PILOT_TOKEN: "pack-final-pilot-token-123456789",
+      DASHOU_INVITE_TUNNEL_TOKEN: "pack-final-tunnel-token-123456789",
+    },
+    stdio: "pipe",
+  });
+  const invite = JSON.parse(readFileSync(invitePath, "utf8"));
+  if (invite.kind !== "dashou-invite" || invite.version !== 1 || invite.publicBaseUrl !== "https://pilot.example.invalid") {
+    throw new Error("fresh package did not generate a valid pilot invite");
   }
 } finally {
   rmSync(temp, { recursive: true, force: true });
@@ -64,5 +84,5 @@ console.log(JSON.stringify({
   version: packageJson.version,
   sha256: execFileSync("shasum", ["-a", "256", packagePath], { encoding: "utf8" }).trim().split(/\s+/)[0],
   freshInstall: true,
-  requiredEntries: ["dist/dashou-cli.js", "dist/dashou-capabilities.js", "dist/dashou-server.js"],
+  requiredEntries: ["dist/dashou-cli.js", "dist/dashou-capabilities.js", "dist/dashou-server.js", "scripts/create-pilot-invite.mjs", "scripts/pilot-admin.mjs"],
 }, null, 2));

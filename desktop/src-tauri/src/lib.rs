@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-#[cfg(unix)]
 use std::io;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -13,8 +12,10 @@ use tauri::{AppHandle, Manager, RunEvent, State};
 
 struct DaemonState(Mutex<Option<Child>>);
 
-const PILOT_POLICY_URL: &str = "https://dashou-pilot-control.whilewon.workers.dev/pilot-policy";
-const PILOT_POLICY_PUBLIC_KEY: &str = r#"-----BEGIN PUBLIC KEY-----
+const CONTROL_BASE_URL: &str = "https://dashou-pilot-control.whilewon.workers.dev";
+const LEGACY_PILOT_POLICY_URL: &str =
+    "https://dashou-pilot-control.whilewon.workers.dev/pilot-policy";
+const LEGACY_PILOT_POLICY_PUBLIC_KEY: &str = r#"-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8nR2Lgof4hTe9ahqRATb
 XZhB1W8atG8nQjmUmZ0ex6+KwubPVcdeFfngD1PCe8I/4EtyOMk9Q68I4X1w0kN0
 g1sGhoC7teEsUW4HhgNxXNsw1wuLWps8RIBUy+VPKUwMqmBHn3EHyHC2DoVEZkV2
@@ -49,6 +50,25 @@ struct DesktopStatus {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DesktopConfiguration {
+    allowed_roots: Vec<String>,
+    public_base_url: String,
+    has_pilot_token: bool,
+    has_tunnel_token: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InviteFile {
+    kind: String,
+    version: u8,
+    public_base_url: String,
+    pilot_token: String,
+    tunnel_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct StoredConfig {
     host: String,
     port: u16,
@@ -63,6 +83,60 @@ struct StoredAuth {
     pilot_token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     tunnel_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pilot_policy_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pilot_public_key_pem: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredApplication {
+    control_base_url: String,
+    device_id: String,
+    application_token: String,
+    application_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplicationApiStatus {
+    application_id: String,
+    status: String,
+    created_at: Option<String>,
+    period: Option<String>,
+    expires_at: Option<String>,
+    mcp_url: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessStatus {
+    status: String,
+    application_id: Option<String>,
+    created_at: Option<String>,
+    period: Option<String>,
+    expires_at: Option<String>,
+    mcp_url: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivationResponse {
+    public_base_url: String,
+    mcp_url: String,
+    tunnel_token: String,
+    pilot_token: String,
+    pilot_policy_url: String,
+    pilot_public_key_pem: String,
+    activation_receipt: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiError {
+    error: Option<String>,
 }
 
 #[tauri::command]
@@ -72,8 +146,9 @@ async fn status(app: AppHandle, state: State<'_, DaemonState>) -> Result<Desktop
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     let config_path = data_dir.join("config").join("config.json");
-    let configured = config_path.exists();
-    let running = daemon_is_running(&state);
+    let config_dir = data_dir.join("config");
+    let configured = configuration_is_ready(&config_path, &config_dir.join("auth.json"));
+    let running = daemon_is_running(&state) || external_daemon_is_running(&data_dir.join("state"));
     let proxy = apply_system_proxy_environment();
     let (mcp_url, local_health, public_health) = if configured && running {
         let public_url = read_public_url(&config_path);
@@ -112,6 +187,177 @@ fn connection_code(app: AppHandle) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+async fn apply_for_access(app: AppHandle) -> Result<AccessStatus, String> {
+    apply_system_proxy_environment();
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let config_dir = data_dir.join("config");
+    fs::create_dir_all(&config_dir).map_err(|error| error.to_string())?;
+    let application_path = config_dir.join("application.json");
+    let mut application =
+        read_application(&application_path).unwrap_or_else(|| StoredApplication {
+            control_base_url: control_base_url(),
+            device_id: format!("dev_{}", generate_token()),
+            application_token: generate_token(),
+            application_id: None,
+        });
+    // Persist the device credential before the request so a lost response can
+    // be retried idempotently without orphaning a server-side application.
+    write_json_atomic(&application_path, &application, true)?;
+    let control_base_url = normalize_control_base_url(&application.control_base_url)?;
+    let request_body = serde_json::json!({
+        "deviceId": application.device_id,
+        "applicationToken": application.application_token,
+        "deviceName": device_name(),
+        "platform": platform_name(),
+    });
+    let response: ApplicationApiStatus = control_request(
+        reqwest::Method::POST,
+        &format!("{control_base_url}/applications"),
+        None,
+        Some(request_body),
+    )
+    .await?;
+    application.application_id = Some(response.application_id.clone());
+    write_json_atomic(&application_path, &application, true)?;
+    Ok(access_status(response))
+}
+
+#[tauri::command]
+async fn application_status(app: AppHandle) -> Result<AccessStatus, String> {
+    apply_system_proxy_environment();
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let config_dir = data_dir.join("config");
+    let application_path = config_dir.join("application.json");
+    let Some(application) = read_application(&application_path) else {
+        return Ok(AccessStatus {
+            status: "not_applied".into(),
+            application_id: None,
+            created_at: None,
+            period: None,
+            expires_at: None,
+            mcp_url: None,
+            reason: None,
+        });
+    };
+    let application_id = application
+        .application_id
+        .as_deref()
+        .ok_or_else(|| "申请尚未成功提交，请重新点击申请".to_string())?;
+    let base_url = normalize_control_base_url(&application.control_base_url)?;
+    let mut response: ApplicationApiStatus = control_request(
+        reqwest::Method::GET,
+        &format!("{base_url}/applications/{application_id}"),
+        Some(&application.application_token),
+        None,
+    )
+    .await?;
+    if response.status == "approved" {
+        let activation: ActivationResponse = control_request(
+            reqwest::Method::POST,
+            &format!("{base_url}/applications/{application_id}/activate"),
+            Some(&application.application_token),
+            Some(serde_json::json!({})),
+        )
+        .await?;
+        save_activation(&config_dir, &activation)?;
+        let confirmed: ApplicationApiStatus = control_request(
+            reqwest::Method::POST,
+            &format!("{base_url}/applications/{application_id}/activate/confirm"),
+            Some(&application.application_token),
+            Some(serde_json::json!({ "activationReceipt": activation.activation_receipt })),
+        )
+        .await?;
+        response = confirmed;
+    }
+    Ok(access_status(response))
+}
+
+#[tauri::command]
+fn configuration(app: AppHandle) -> Result<Option<DesktopConfiguration>, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let config_path = data_dir.join("config").join("config.json");
+    let text = match fs::read_to_string(&config_path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let config: StoredConfig = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    let config_dir = config_path
+        .parent()
+        .ok_or_else(|| "配置目录不存在".to_string())?;
+    Ok(Some(DesktopConfiguration {
+        allowed_roots: config.allowed_roots,
+        public_base_url: config.public_base_url,
+        has_pilot_token: read_pilot_token(config_dir).is_some(),
+        has_tunnel_token: read_tunnel_token(config_dir).is_some(),
+    }))
+}
+
+#[tauri::command]
+fn import_invite(app: AppHandle, path: String) -> Result<(), String> {
+    let text = fs::read_to_string(&path).map_err(|error| format!("无法读取邀请文件：{error}"))?;
+    let invite: InviteFile =
+        serde_json::from_str(&text).map_err(|error| format!("邀请文件格式不正确：{error}"))?;
+    if invite.kind != "dashou-invite" || invite.version != 1 {
+        return Err("这不是受支持的搭手邀请文件".into());
+    }
+    if invite.pilot_token.trim().len() < 16 {
+        return Err("邀请文件缺少有效的内测授权".into());
+    }
+    let public_url = normalize_public_url(&invite.public_base_url)?;
+    if !public_url.starts_with("https://") {
+        return Err("管理员邀请必须使用 HTTPS 公网地址".into());
+    }
+
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let config_dir = data_dir.join("config");
+    fs::create_dir_all(&config_dir).map_err(|error| error.to_string())?;
+    let existing_config = read_stored_config(&config_dir.join("config.json"));
+    let owner_token = read_owner_token(&config_dir).unwrap_or_else(generate_token);
+    let tunnel_token = invite.tunnel_token.filter(|token| !token.trim().is_empty());
+    write_json_atomic(
+        &config_dir.join("config.json"),
+        &StoredConfig {
+            host: "127.0.0.1".into(),
+            port: existing_config
+                .as_ref()
+                .map(|config| config.port)
+                .unwrap_or(7677),
+            allowed_roots: existing_config
+                .map(|config| config.allowed_roots)
+                .unwrap_or_default(),
+            public_base_url: public_url,
+        },
+        false,
+    )?;
+    write_json_atomic(
+        &config_dir.join("auth.json"),
+        &StoredAuth {
+            owner_token,
+            pilot_token: invite.pilot_token.trim().to_string(),
+            tunnel_token,
+            pilot_policy_url: Some(LEGACY_PILOT_POLICY_URL.into()),
+            pilot_public_key_pem: Some(LEGACY_PILOT_POLICY_PUBLIC_KEY.into()),
+        },
+        true,
+    )?;
+    clear_application_record(&config_dir)?;
+    Ok(())
+}
+
+#[tauri::command]
 fn configure(app: AppHandle, settings: DesktopSettings) -> Result<(), String> {
     if settings.allowed_roots.is_empty() {
         return Err("至少需要一个授权目录".into());
@@ -123,17 +369,32 @@ fn configure(app: AppHandle, settings: DesktopSettings) -> Result<(), String> {
     {
         return Err("授权目录必须使用绝对路径".into());
     }
-    if settings.pilot_token.trim().is_empty() {
-        return Err("内测连接码不能为空".into());
-    }
-    let public_url = normalize_public_url(&settings.public_base_url)?;
     let data_dir = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     let config_dir = data_dir.join("config");
     fs::create_dir_all(&config_dir).map_err(|error| error.to_string())?;
+    let pilot_token = if settings.pilot_token.trim().is_empty() {
+        read_pilot_token(&config_dir).ok_or_else(|| "内测连接码不能为空".to_string())?
+    } else {
+        settings.pilot_token
+    };
+    let public_url = if settings.public_base_url.trim().is_empty() {
+        read_public_url(&config_dir.join("config.json"))
+            .ok_or_else(|| "公网地址不能为空".to_string())?
+    } else {
+        normalize_public_url(&settings.public_base_url)?
+    };
     let owner_token = read_owner_token(&config_dir).unwrap_or_else(generate_token);
+    let tunnel_token = settings
+        .tunnel_token
+        .filter(|token| !token.trim().is_empty())
+        .or_else(|| read_tunnel_token(&config_dir));
+    let pilot_policy_url =
+        read_pilot_policy_url(&config_dir).or_else(|| Some(LEGACY_PILOT_POLICY_URL.into()));
+    let pilot_public_key_pem =
+        read_pilot_public_key(&config_dir).or_else(|| Some(LEGACY_PILOT_POLICY_PUBLIC_KEY.into()));
     write_json_atomic(
         &config_dir.join("config.json"),
         &StoredConfig {
@@ -148,10 +409,10 @@ fn configure(app: AppHandle, settings: DesktopSettings) -> Result<(), String> {
         &config_dir.join("auth.json"),
         &StoredAuth {
             owner_token,
-            pilot_token: settings.pilot_token,
-            tunnel_token: settings
-                .tunnel_token
-                .filter(|token| !token.trim().is_empty()),
+            pilot_token,
+            tunnel_token,
+            pilot_policy_url,
+            pilot_public_key_pem,
         },
         true,
     )?;
@@ -179,6 +440,15 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
     let config_dir = data_dir.join("config");
     if !config_dir.join("config.json").exists() || !config_dir.join("auth.json").exists() {
         return Err("请先完成第一次设置".into());
+    }
+    match live_lock_owner(&data_dir.join("state")) {
+        Some(LiveLockOwner::Dashou(pid)) => {
+            return Err(format!("DASHOU_ALREADY_RUNNING:{pid}"));
+        }
+        Some(LiveLockOwner::Other | LiveLockOwner::Unknown) => {
+            return Err("DASHOU_OTHER_PROCESS".into());
+        }
+        None => {}
     }
     let resource_dir = app
         .path()
@@ -209,6 +479,10 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
         std::env::var("PATH").unwrap_or_default()
     );
     let pilot_token = read_pilot_token(&config_dir).unwrap_or_default();
+    let pilot_policy_url =
+        read_pilot_policy_url(&config_dir).unwrap_or_else(|| LEGACY_PILOT_POLICY_URL.into());
+    let pilot_public_key =
+        read_pilot_public_key(&config_dir).unwrap_or_else(|| LEGACY_PILOT_POLICY_PUBLIC_KEY.into());
     let log_path = data_dir.join("logs").join("runtime.log");
     if let Some(parent) = log_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -233,8 +507,8 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
         .env("DASHOU_CONFIG_DIR", &config_dir)
         .env("DASHOU_STATE_DIR", data_dir.join("state"))
         .env("DASHOU_TRUST_PROXY", "1")
-        .env("DASHOU_PILOT_POLICY_URL", PILOT_POLICY_URL)
-        .env("DASHOU_PILOT_POLICY_PUBLIC_KEY", PILOT_POLICY_PUBLIC_KEY)
+        .env("DASHOU_PILOT_POLICY_URL", pilot_policy_url)
+        .env("DASHOU_PILOT_POLICY_PUBLIC_KEY", pilot_public_key)
         .env("DASHOU_PILOT_POLICY_TOKEN", pilot_token)
         .env("DASHOU_CLOUDFLARED_PATH", cloudflared)
         .env("DASHOU_EMBEDDED_RUNTIME", "1")
@@ -279,6 +553,33 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
 #[tauri::command]
 fn stop_daemon(state: State<'_, DaemonState>) -> Result<(), String> {
     stop_child(&state)
+}
+
+/// Take over only a process that is proven to be the Dashou service for this
+/// app-data directory. An unknown process is never stopped automatically.
+#[tauri::command]
+fn take_over_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), String> {
+    stop_child(&state)?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let state_dir = data_dir.join("state");
+    let Some(pid) = (match live_lock_owner(&state_dir) {
+        Some(LiveLockOwner::Dashou(pid)) => Some(pid),
+        Some(LiveLockOwner::Other | LiveLockOwner::Unknown) => {
+            return Err("发现其他程序占用了搭手服务，出于安全原因没有停止它".into());
+        }
+        None => None,
+    }) else {
+        return Ok(());
+    };
+
+    terminate_external_daemon(pid)?;
+    if process_is_alive(pid) {
+        return Err("搭手没有完全退出，请稍后再试".into());
+    }
+    Ok(())
 }
 
 fn daemon_is_running(state: &State<'_, DaemonState>) -> bool {
@@ -336,6 +637,154 @@ fn stop_child(state: &State<'_, DaemonState>) -> Result<(), String> {
         let _ = child.wait();
     }
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum LiveLockOwner {
+    Dashou(u32),
+    Other,
+    Unknown,
+}
+
+fn external_daemon_is_running(state_dir: &Path) -> bool {
+    matches!(live_lock_owner(state_dir), Some(LiveLockOwner::Dashou(_)))
+}
+
+fn live_lock_owner(state_dir: &Path) -> Option<LiveLockOwner> {
+    let lock_path = state_dir.join("serve.lock");
+    let pid_path = lock_path.join("pid");
+    let pid = fs::read_to_string(pid_path)
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|pid| *pid > 0)?;
+    if !process_is_alive(pid) {
+        return None;
+    }
+    match process_command(pid) {
+        Some(command) if is_dashou_serve_command(&command) => Some(LiveLockOwner::Dashou(pid)),
+        Some(_) => Some(LiveLockOwner::Other),
+        None => Some(LiveLockOwner::Unknown),
+    }
+}
+
+fn is_dashou_serve_command(command: &str) -> bool {
+    let normalized = command.replace('\\', "/");
+    let tokens: Vec<String> = normalized
+        .split_whitespace()
+        .map(|token| token.trim_matches(['"', '\'']).to_string())
+        .collect();
+    let Some(executable) = tokens.first().and_then(|token| token.rsplit('/').next()) else {
+        return false;
+    };
+    if !executable.eq_ignore_ascii_case("node") && !executable.eq_ignore_ascii_case("node.exe") {
+        return false;
+    }
+    tokens.windows(2).any(|pair| {
+        let entry = pair[0].rsplit('/').next().unwrap_or_default();
+        entry.eq_ignore_ascii_case("dashou-cli.js") && pair[1] == "serve"
+    })
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        return result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+    }
+    #[cfg(windows)]
+    {
+        return Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+    }
+}
+
+fn process_command(pid: u32) -> Option<String> {
+    #[cfg(unix)]
+    {
+        let output = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "command="])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return (!command.is_empty()).then_some(command);
+    }
+    #[cfg(windows)]
+    {
+        let script = format!(
+            "Get-CimInstance Win32_Process -Filter \"ProcessId = {pid}\" | ForEach-Object {{ $_.CommandLine }}"
+        );
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return (!command.is_empty()).then_some(command);
+    }
+}
+
+fn terminate_external_daemon(pid: u32) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let process_group = process_group_id(pid);
+        let signal_target = if process_group == Some(pid) {
+            -(pid as libc::pid_t)
+        } else {
+            pid as libc::pid_t
+        };
+        let result = unsafe { libc::kill(signal_target, libc::SIGTERM) };
+        if result != 0 && process_is_alive(pid) {
+            return Err("无法重新启动搭手，请稍后再试".into());
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while process_is_alive(pid) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
+        if process_is_alive(pid) {
+            let result = unsafe { libc::kill(signal_target, libc::SIGKILL) };
+            if result != 0 && process_is_alive(pid) {
+                return Err("搭手没有完全退出，请稍后再试".into());
+            }
+        }
+        return Ok(());
+    }
+    #[cfg(windows)]
+    {
+        let status = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|_| "无法重新启动搭手，请稍后再试".to_string())?;
+        if !status.success() && process_is_alive(pid) {
+            return Err("无法重新启动搭手，请稍后再试".into());
+        }
+        return Ok(());
+    }
+}
+
+#[cfg(unix)]
+fn process_group_id(pid: u32) -> Option<u32> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "pgid="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 
 fn read_public_url(path: &Path) -> Option<String> {
@@ -587,15 +1036,220 @@ fn redact_proxy(value: &str) -> String {
 }
 
 fn read_owner_token(config_dir: &Path) -> Option<String> {
-    let value: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(config_dir.join("auth.json")).ok()?).ok()?;
-    value.get("ownerToken")?.as_str().map(str::to_string)
+    let auth_value: Option<serde_json::Value> = fs::read_to_string(config_dir.join("auth.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok());
+    auth_value
+        .and_then(|value| value.get("ownerToken")?.as_str().map(str::to_string))
+        .or_else(|| {
+            fs::read_to_string(config_dir.join("secrets").join("owner-token"))
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+}
+
+fn configuration_is_ready(config_path: &Path, auth_path: &Path) -> bool {
+    let Some(config) = read_stored_config(config_path) else {
+        return false;
+    };
+    let Some(config_dir) = config_path.parent() else {
+        return false;
+    };
+    !config.allowed_roots.is_empty()
+        && auth_path.is_file()
+        && read_owner_token(config_dir).is_some()
+        && read_pilot_token(config_dir).is_some()
+}
+
+fn read_stored_config(path: &Path) -> Option<StoredConfig> {
+    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
 fn read_pilot_token(config_dir: &Path) -> Option<String> {
     let value: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(config_dir.join("auth.json")).ok()?).ok()?;
     value.get("pilotToken")?.as_str().map(str::to_string)
+}
+
+fn read_tunnel_token(config_dir: &Path) -> Option<String> {
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(config_dir.join("auth.json")).ok()?).ok()?;
+    value.get("tunnelToken")?.as_str().map(str::to_string)
+}
+
+fn read_pilot_policy_url(config_dir: &Path) -> Option<String> {
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(config_dir.join("auth.json")).ok()?).ok()?;
+    value.get("pilotPolicyUrl")?.as_str().map(str::to_string)
+}
+
+fn read_pilot_public_key(config_dir: &Path) -> Option<String> {
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(config_dir.join("auth.json")).ok()?).ok()?;
+    value.get("pilotPublicKeyPem")?.as_str().map(str::to_string)
+}
+
+fn read_application(path: &Path) -> Option<StoredApplication> {
+    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
+}
+
+fn clear_application_record(config_dir: &Path) -> Result<(), String> {
+    match fs::remove_file(config_dir.join("application.json")) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("无法完成邀请切换：{error}")),
+    }
+}
+
+fn access_status(response: ApplicationApiStatus) -> AccessStatus {
+    AccessStatus {
+        status: response.status,
+        application_id: Some(response.application_id),
+        created_at: response.created_at,
+        period: response.period,
+        expires_at: response.expires_at,
+        mcp_url: response.mcp_url,
+        reason: response.reason,
+    }
+}
+
+async fn control_request<T: serde::de::DeserializeOwned>(
+    method: reqwest::Method,
+    url: &str,
+    bearer_token: Option<&str>,
+    body: Option<serde_json::Value>,
+) -> Result<T, String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|_| "暂时无法准备网络连接，请稍后再试".to_string())?;
+    let mut request = client
+        .request(method, url)
+        .header(reqwest::header::ACCEPT, "application/json");
+    if let Some(token) = bearer_token {
+        request = request.bearer_auth(token);
+    }
+    if let Some(value) = body {
+        request = request.json(&value);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|_| "暂时无法联系搭手服务，请检查网络后重试".to_string())?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|_| "搭手服务返回了无法读取的结果".to_string())?;
+    if !status.is_success() {
+        let message = serde_json::from_str::<ApiError>(&text)
+            .ok()
+            .and_then(|value| value.error)
+            .unwrap_or_else(|| "申请暂时没有完成".into());
+        return Err(format!("搭手服务返回 {}：{}", status.as_u16(), message));
+    }
+    serde_json::from_str(&text).map_err(|_| "搭手服务返回了无法识别的结果".to_string())
+}
+
+fn save_activation(config_dir: &Path, activation: &ActivationResponse) -> Result<(), String> {
+    let public_base_url = normalize_public_url(&activation.public_base_url)?;
+    let expected_mcp_url = format!("{}/mcp", public_base_url.trim_end_matches('/'));
+    if activation.mcp_url.trim_end_matches('/') != expected_mcp_url {
+        return Err("搭手服务返回的连接地址不一致，请联系管理员".into());
+    }
+    let pilot_policy_url = normalize_control_url(&activation.pilot_policy_url)?;
+    if activation.tunnel_token.trim().len() < 16 || activation.pilot_token.trim().len() < 16 {
+        return Err("搭手服务返回的设备授权不完整，请联系管理员".into());
+    }
+    let pilot_public_key = activation.pilot_public_key_pem.trim();
+    if !pilot_public_key.starts_with("-----BEGIN PUBLIC KEY-----")
+        || !pilot_public_key.ends_with("-----END PUBLIC KEY-----")
+    {
+        return Err("搭手服务返回的签名信息无效，请联系管理员".into());
+    }
+    fs::create_dir_all(config_dir).map_err(|error| error.to_string())?;
+    let existing_config = read_stored_config(&config_dir.join("config.json"));
+    let owner_token = read_owner_token(config_dir).unwrap_or_else(generate_token);
+    write_json_atomic(
+        &config_dir.join("config.json"),
+        &StoredConfig {
+            host: "127.0.0.1".into(),
+            port: existing_config
+                .as_ref()
+                .map(|config| config.port)
+                .unwrap_or(7677),
+            allowed_roots: existing_config
+                .map(|config| config.allowed_roots)
+                .unwrap_or_default(),
+            public_base_url,
+        },
+        false,
+    )?;
+    write_json_atomic(
+        &config_dir.join("auth.json"),
+        &StoredAuth {
+            owner_token,
+            pilot_token: activation.pilot_token.trim().into(),
+            tunnel_token: Some(activation.tunnel_token.trim().into()),
+            pilot_policy_url: Some(pilot_policy_url),
+            pilot_public_key_pem: Some(pilot_public_key.into()),
+        },
+        true,
+    )
+}
+
+fn control_base_url() -> String {
+    std::env::var("DASHOU_CONTROL_BASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| CONTROL_BASE_URL.into())
+}
+
+fn normalize_control_base_url(value: &str) -> Result<String, String> {
+    let value = value.trim().trim_end_matches('/');
+    normalize_control_url(value)?;
+    Ok(value.to_string())
+}
+
+fn normalize_control_url(value: &str) -> Result<String, String> {
+    let url = value
+        .parse::<reqwest::Url>()
+        .map_err(|_| "搭手服务地址无效".to_string())?;
+    let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    if url.scheme() != "https" && !(url.scheme() == "http" && local) {
+        return Err("搭手服务地址必须使用安全连接".into());
+    }
+    Ok(url.to_string().trim_end_matches('/').to_string())
+}
+
+fn device_name() -> String {
+    #[cfg(target_os = "macos")]
+    if let Ok(output) = Command::new("scutil")
+        .args(["--get", "ComputerName"])
+        .output()
+    {
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return name.chars().take(100).collect();
+            }
+        }
+    }
+    for key in ["COMPUTERNAME", "HOSTNAME"] {
+        if let Ok(name) = std::env::var(key) {
+            let name = name.trim();
+            if !name.is_empty() {
+                return name.chars().take(100).collect();
+            }
+        }
+    }
+    "我的电脑".into()
+}
+
+fn platform_name() -> String {
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
 fn locate_resource_root(resource_dir: &Path) -> PathBuf {
@@ -690,15 +1344,21 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(DaemonState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             status,
             connection_code,
+            apply_for_access,
+            application_status,
+            configuration,
+            import_invite,
             configure,
             start_daemon,
-            stop_daemon
+            stop_daemon,
+            take_over_daemon
         ])
         .build(tauri::generate_context!())
         .expect("error while building Dashou desktop application")
@@ -762,7 +1422,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.2-rc8".into(),
+            version: "0.1.2-rc9".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -772,6 +1432,86 @@ mod tests {
         let json = serde_json::to_value(status).expect("serialize status");
         assert!(json.get("connectionCode").is_none());
         assert!(json.get("ownerToken").is_none());
+    }
+
+    #[test]
+    fn activation_is_saved_privately_without_replacing_selected_folders() {
+        let root = test_root("activation");
+        fs::create_dir_all(&root).expect("create activation test directory");
+        write_json_atomic(
+            &root.join("config.json"),
+            &StoredConfig {
+                host: "127.0.0.1".into(),
+                port: 7677,
+                allowed_roots: vec!["/tmp/project-one".into(), "/tmp/project-two".into()],
+                public_base_url: "https://old.example".into(),
+            },
+            false,
+        )
+        .expect("write initial config");
+        let activation = ActivationResponse {
+            public_base_url: "https://device-test.warmbyte.studio".into(),
+            mcp_url: "https://device-test.warmbyte.studio/mcp".into(),
+            tunnel_token: "test-tunnel-token-123456789".into(),
+            pilot_token: "test-pilot-token-123456789".into(),
+            pilot_policy_url: "https://control.example/pilot-policy".into(),
+            pilot_public_key_pem:
+                "-----BEGIN PUBLIC KEY-----\ntest-public-key\n-----END PUBLIC KEY-----".into(),
+            activation_receipt: "receipt-is-not-persisted".into(),
+        };
+        save_activation(&root, &activation).expect("save activation");
+        let config = read_stored_config(&root.join("config.json")).expect("read saved config");
+        assert_eq!(config.allowed_roots.len(), 2);
+        assert_eq!(
+            config.public_base_url,
+            "https://device-test.warmbyte.studio"
+        );
+        let auth = fs::read_to_string(root.join("auth.json")).expect("read saved auth");
+        assert!(auth.contains("test-tunnel-token-123456789"));
+        assert!(auth.contains("test-pilot-token-123456789"));
+        assert!(!auth.contains("receipt-is-not-persisted"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(root.join("auth.json"))
+                    .expect("auth metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        fs::remove_dir_all(root).expect("remove activation test directory");
+    }
+
+    #[test]
+    fn fallback_invite_clears_stale_application_record() {
+        let root = test_root("fallback-invite");
+        fs::create_dir_all(&root).expect("create fallback invite test directory");
+        fs::write(root.join("application.json"), b"stale application")
+            .expect("write stale application record");
+
+        clear_application_record(&root).expect("clear stale application record");
+        assert!(!root.join("application.json").exists());
+        clear_application_record(&root).expect("missing application record is already clear");
+
+        fs::remove_dir_all(root).expect("remove fallback invite test directory");
+    }
+
+    #[test]
+    fn recognizes_only_dashou_serve_commands() {
+        assert!(is_dashou_serve_command(
+            "node /Applications/Dashou.app/Contents/Resources/vendor/dashou-runtime/dist/dashou-cli.js serve"
+        ));
+        assert!(is_dashou_serve_command(
+            "\"C:\\\\Dashou\\\\node.exe\" --use-env-proxy \"C:\\\\Dashou\\\\dist\\\\dashou-cli.js\" serve"
+        ));
+        assert!(!is_dashou_serve_command("node /tmp/other.js serve"));
+        assert!(!is_dashou_serve_command("node /tmp/dashou-cli.js doctor"));
+        assert!(!is_dashou_serve_command(
+            "/usr/bin/python /tmp/dashou-cli.js serve"
+        ));
     }
 
     #[cfg(windows)]

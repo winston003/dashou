@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 
-export const DASHOU_V0_TOOLS = ["open_project", "read", "write", "edit", "execute"] as const;
+export const DASHOU_V0_TOOLS = ["list_projects", "open_project", "read", "write", "edit", "execute"] as const;
 
 export function dashouVersion(): string {
   const packageJson = require("../package.json") as { version?: unknown };

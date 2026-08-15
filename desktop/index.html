@@ -14,53 +14,56 @@
       </header>
 
       <section id="setup" class="card hidden">
-        <h2>第一次设置</h2>
-        <p>先选一个要让 ChatGPT 帮你处理的文件夹，再填写管理员给你的连接信息。</p>
-        <label>
-          授权目录
-          <div class="path-picker">
-            <input id="roots" type="text" placeholder="尚未选择文件夹" readonly />
-            <button id="choose-folder" type="button">选择文件夹</button>
+        <h2>开始使用</h2>
+        <p>先申请开通，再选择 ChatGPT 可以使用的文件夹。无需填写连接信息。</p>
+        <div class="setup-step">
+          <span class="step-number">1</span>
+          <div class="step-copy">
+            <strong>申请开通</strong>
+            <span id="access-status">尚未申请</span>
           </div>
-        </label>
-        <details class="advanced">
-          <summary>连接信息</summary>
-          <label>
-            公网地址
-            <input id="public-url" type="url" placeholder="https://alice.warmbyte.studio" />
-          </label>
-          <label>
-            内测连接码 <span class="muted">（管理员分配）</span>
-            <input id="pilot-token" type="password" autocomplete="off" />
-          </label>
-          <label>
-            Tunnel Token <span class="muted">（管理员提供时填写，没有就留空）</span>
-            <input id="tunnel-token" type="password" autocomplete="off" />
-          </label>
+          <button id="apply-access" type="button">申请开通</button>
+        </div>
+        <div class="setup-step">
+          <span class="step-number">2</span>
+          <div class="step-copy">
+            <strong>选择工作文件夹</strong>
+            <span id="roots-count">可选择一个或多个文件夹</span>
+          </div>
+          <div class="roots-picker">
+            <div id="roots-list" class="roots-list" aria-live="polite"></div>
+            <button id="choose-folder" type="button">添加文件夹</button>
+          </div>
+        </div>
+        <button id="save-start" class="primary" disabled>开始使用</button>
+        <details class="invite-fallback">
+          <summary>已有管理员邀请文件</summary>
+          <p>仅在管理员要求时使用。</p>
+          <button id="import-invite" type="button">选择邀请文件</button>
         </details>
-        <button id="save-start" class="primary">保存并启动</button>
         <p id="setup-error" class="error"></p>
       </section>
 
       <section id="ready" class="card hidden">
         <div class="status-row"><span id="status-dot" class="dot"></span><strong id="status-text">准备中</strong></div>
         <p id="ready-copy">搭手正在检查连接。</p>
-        <div class="detail"><span>MCP 地址</span><code id="mcp-url">—</code></div>
-        <div class="detail"><span>本地服务</span><code id="local-health">—</code></div>
-        <div class="detail"><span>公网连接</span><code id="public-health">—</code></div>
-        <div class="detail"><span>网络</span><code id="proxy">—</code></div>
-        <div class="detail"><span>版本</span><code id="version">—</code></div>
-        <div class="actions">
-          <button id="connect-chatgpt" class="primary">连接 ChatGPT</button>
-          <button id="copy-code">复制连接密码</button>
-          <button id="copy-address">复制连接地址</button>
-          <button id="check-update">检查更新</button>
-          <button id="reconfigure">重新设置</button>
+        <div class="actions primary-actions">
+          <button id="connect-chatgpt" class="primary">去 ChatGPT 连接</button>
+          <button id="copy-code">复制授权密码</button>
+          <button id="restart-daemon" class="primary hidden">重新启动</button>
         </div>
+        <details class="more-actions">
+          <summary>其他操作</summary>
+          <div class="actions">
+            <button id="copy-address">复制连接地址</button>
+            <button id="check-update">检查更新</button>
+            <button id="reconfigure">重新设置</button>
+          </div>
+        </details>
         <p id="message" class="message"></p>
       </section>
 
-      <footer><span>五个清晰的本地工具 · 读写修改执行</span><span id="app-version"></span></footer>
+      <footer><span>只访问你选择的文件夹</span><span id="app-version"></span></footer>
     </main>
     <script type="module" src="/src/main.js"></script>
   </body>

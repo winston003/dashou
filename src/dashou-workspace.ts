@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import {
   lstat,
   mkdir,
+  opendir,
   readFile,
   realpath,
   rename,
@@ -10,7 +11,7 @@ import {
   writeFile,
   unlink,
 } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { expandHome } from "./dashou-config.js";
 import { runtimeEnvironment } from "./dashou-runtime-contract.js";
@@ -20,10 +21,40 @@ const MAX_READ_BYTES = 2 * 1024 * 1024;
 const MAX_WRITE_BYTES = 5 * 1024 * 1024;
 const MAX_COMMAND_BUFFER = 4 * 1024 * 1024;
 const MAX_VISIBLE_OUTPUT = 120_000;
+const MAX_INSTRUCTION_BYTES = 2 * 1024 * 1024;
+const MAX_INSTRUCTION_DISCOVERY_ENTRIES = 20_000;
+const PROJECT_INSTRUCTION_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]);
+const SKIPPED_INSTRUCTION_DIRECTORIES = new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  "node_modules",
+  "dist",
+  "build",
+  ".next",
+  ".turbo",
+  ".cache",
+  "coverage",
+  "target",
+]);
+
+export interface DashouProjectInstruction {
+  path: string;
+  content: string;
+}
+
+export interface DashouProject {
+  name: string;
+  path: string;
+  available: boolean;
+}
 
 export interface DashouWorkspace {
   id: string;
   root: string;
+  instructions: DashouProjectInstruction[];
+  availableInstructionFiles: string[];
+  instructionsDigest: string;
 }
 
 export interface CommandResult {
@@ -39,6 +70,36 @@ export class DashouWorkspaceRegistry {
 
   constructor(private readonly allowedRoots: string[]) {}
 
+  async listProjects(): Promise<DashouProject[]> {
+    const projects: DashouProject[] = [];
+    const seen = new Set<string>();
+
+    for (const configuredRoot of this.allowedRoots) {
+      const configuredPath = resolve(expandHome(configuredRoot));
+      let projectPath = configuredPath;
+      let available = false;
+
+      try {
+        projectPath = await realpath(configuredPath);
+        const metadata = await stat(projectPath);
+        if (!metadata.isDirectory()) continue;
+        available = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+
+      if (seen.has(projectPath)) continue;
+      seen.add(projectPath);
+      projects.push({
+        name: basename(projectPath) || projectPath,
+        path: projectPath,
+        available,
+      });
+    }
+
+    return projects.sort((left, right) => left.name.localeCompare(right.name) || left.path.localeCompare(right.path));
+  }
+
   async openProject(inputPath: string): Promise<DashouWorkspace> {
     const candidate = resolve(expandHome(inputPath));
     const root = await realpath(candidate);
@@ -51,9 +112,11 @@ export class DashouWorkspaceRegistry {
     const existingId = this.projectIds.get(root);
     if (existingId) return this.requireWorkspace(existingId);
 
+    const context = await loadProjectContext(root);
     const workspace: DashouWorkspace = {
       id: `ws_${randomUUID().replaceAll("-", "").slice(0, 10)}`,
       root,
+      ...context,
     };
     this.workspaces.set(workspace.id, workspace);
     this.projectIds.set(root, workspace.id);
@@ -243,6 +306,87 @@ export class DashouWorkspaceRegistry {
 
   private assertInside(root: string, candidate: string): void {
     if (!isInside(root, candidate)) throw new Error("Path is outside the opened project");
+  }
+}
+
+interface DashouProjectContext {
+  instructions: DashouProjectInstruction[];
+  availableInstructionFiles: string[];
+  instructionsDigest: string;
+}
+
+async function loadProjectContext(root: string): Promise<DashouProjectContext> {
+  const discovered: string[] = [];
+  await discoverInstructionFiles(root, discovered, { count: 0 });
+
+  const relativePaths = discovered
+    .map((path) => relative(root, path).split(sep).join("/"))
+    .sort();
+  const rootInstructionPaths = relativePaths.filter((path) => !path.includes("/"));
+  const nestedInstructionPaths = relativePaths.filter((path) => path.includes("/"));
+  const instructions: DashouProjectInstruction[] = [];
+
+  for (const path of rootInstructionPaths) {
+    const content = await readInstructionFile(root, join(root, ...path.split("/")));
+    if (content !== undefined) instructions.push({ path, content });
+  }
+
+  const instructionsDigest = createHash("sha256")
+    .update(JSON.stringify({ instructions, availableInstructionFiles: nestedInstructionPaths }))
+    .digest("hex");
+
+  return {
+    instructions,
+    availableInstructionFiles: nestedInstructionPaths,
+    instructionsDigest,
+  };
+}
+
+async function discoverInstructionFiles(
+  current: string,
+  discovered: string[],
+  budget: { count: number },
+): Promise<void> {
+  if (budget.count >= MAX_INSTRUCTION_DISCOVERY_ENTRIES) return;
+
+  let directory;
+  try {
+    directory = await opendir(current);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM") return;
+    throw error;
+  }
+
+  for await (const entry of directory) {
+    budget.count += 1;
+    if (budget.count > MAX_INSTRUCTION_DISCOVERY_ENTRIES) return;
+    if (entry.isSymbolicLink()) continue;
+
+    const path = join(current, entry.name);
+    if (entry.isFile() && PROJECT_INSTRUCTION_NAMES.has(entry.name)) {
+      discovered.push(path);
+      continue;
+    }
+    if (entry.isDirectory() && !SKIPPED_INSTRUCTION_DIRECTORIES.has(entry.name)) {
+      await discoverInstructionFiles(path, discovered, budget);
+    }
+  }
+}
+
+async function readInstructionFile(root: string, path: string): Promise<string | undefined> {
+  try {
+    const metadata = await lstat(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) return undefined;
+    const physical = await realpath(path);
+    if (!isInside(root, physical)) return undefined;
+    const content = await readFile(physical);
+    if (content.length <= MAX_INSTRUCTION_BYTES) return content.toString("utf8");
+    return `${content.subarray(0, MAX_INSTRUCTION_BYTES).toString("utf8")}\n\n[Project instruction truncated at ${MAX_INSTRUCTION_BYTES} bytes.]`;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM") return undefined;
+    throw error;
   }
 }
 

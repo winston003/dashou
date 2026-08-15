@@ -10,7 +10,20 @@ on:
       - "desktop-v*"
 
 jobs:
+  verify-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npm ci --prefix desktop
+      - run: npm run verify:pilot-release
+
   build-macos:
+    needs: verify-source
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -36,12 +49,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri:build --prefix desktop -- --bundles app,dmg
+      - name: Verify macOS bundle signature
+        run: codesign --verify --deep --strict desktop/src-tauri/target/release/bundle/macos/Dashou.app
       - uses: actions/upload-artifact@v4
         with:
           name: dashou-macos-arm64
           path: desktop/src-tauri/target/release/bundle/**
 
   build-macos-x64:
+    needs: verify-source
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
@@ -67,12 +83,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri:build --prefix desktop -- --bundles app,dmg
+      - name: Verify macOS bundle signature
+        run: codesign --verify --deep --strict desktop/src-tauri/target/release/bundle/macos/Dashou.app
       - uses: actions/upload-artifact@v4
         with:
           name: dashou-macos-x64
           path: desktop/src-tauri/target/release/bundle/**
 
   build-windows:
+    needs: verify-source
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -169,6 +188,13 @@ jobs:
           DASHOU_WINDOWS_SIGNATURE: release-assets/dashou-${{ steps.release.outputs.version }}-windows-x86_64-setup.exe.sig
           DASHOU_UPDATER_MANIFEST_PATH: release-assets/latest.json
         run: node desktop/scripts/create-updater-manifest.mjs
+      - name: Require matching deployed control plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ steps.release.outputs.version }}"
+          actual="$(curl --fail --silent --show-error https://dashou-pilot-control.whilewon.workers.dev/healthz | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).version||""))')"
+          test "$actual" = "$expected"
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -176,4 +202,14 @@ jobs:
           tag_name: desktop-${{ steps.release.outputs.version }}
           token: ${{ secrets.DASHOU_RELEASES_TOKEN }}
           generate_release_notes: true
+          body: |
+            ## 安装
+
+            - Apple 芯片 Mac：下载 `darwin-aarch64.dmg`
+            - Intel Mac：下载 `darwin-x86_64.dmg`
+            - Windows 10/11：下载 `windows-x86_64-setup.exe`
+
+            安装后打开搭手，点击“申请开通”，等待管理员同意；然后选择一个或多个工作文件夹，点击“开始使用”和“去 ChatGPT 连接”。用户无需填写公网地址、连接码或 Tunnel Token。
+
+            如果 ChatGPT 授权页要求密码，回到搭手点击“复制授权密码”。
           files: release-assets/*

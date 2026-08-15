@@ -1,6 +1,6 @@
 {
   "name": "@warmbyte/dashou",
-  "version": "0.1.2-rc8",
+  "version": "0.1.2-rc9",
   "description": "让 ChatGPT 安全地读取、修改并执行你授权的本地项目。",
   "type": "module",
   "main": "dist/dashou-server.js",
@@ -12,6 +12,8 @@
   },
   "files": [
     "dist",
+    "scripts/create-pilot-invite.mjs",
+    "scripts/pilot-admin.mjs",
     "docs/PILOT.md",
     "README.md",
     "LICENSE"
@@ -26,7 +28,9 @@
     "test": "tsx src/dashou-config.test.ts && tsx src/dashou-oauth-store.test.ts && tsx src/dashou-workspace.test.ts && tsx src/dashou-tunnel.test.ts && tsx src/dashou-runtime-contract.test.ts && tsx src/dashou-single-instance.test.ts && tsx src/dashou-server-shutdown.test.ts && tsx src/dashou-upgrade.test.ts && tsx src/dashou-pilot-policy.test.ts && tsx src/dashou-pilot-control.test.ts && tsx src/dashou-server.test.ts && tsx src/dashou-http.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify:release": "npm run typecheck && npm test && npm run build && npm_config_registry=https://registry.npmjs.org npm audit --omit=dev",
-    "pack:pilot": "npm run verify:release && npm run verify:pilot && npm run verify:upgrade",
+    "verify:desktop": "npm run build:frontend --prefix desktop && cargo test --manifest-path desktop/src-tauri/Cargo.toml",
+    "verify:pilot-release": "npm run verify:release && npm run verify:control-plane && npm run verify:desktop",
+    "pack:pilot": "npm run verify:pilot-release && npm run verify:pilot && npm run verify:upgrade",
     "make:cli-manifest": "node scripts/cli-manifest.mjs",
     "verify:pilot": "npm run build && node scripts/pack-final.mjs && node scripts/pilot-smoke.mjs",
     "verify:public": "npm run build && node scripts/public-smoke.mjs",
@@ -37,8 +41,9 @@
     "desktop:dev": "npm run tauri:dev --prefix desktop",
     "desktop:build": "npm run tauri:build --prefix desktop",
     "pilot:admin": "node scripts/pilot-admin.mjs",
+    "pilot:invite": "node scripts/create-pilot-invite.mjs",
     "deploy:control-plane": "node scripts/deploy-control-plane.mjs",
-    "verify:control-plane": "node --check control-plane/src/index.js && node --test control-plane/src/index.test.mjs && npx wrangler deploy --config control-plane/wrangler.jsonc --dry-run",
+    "verify:control-plane": "node --check control-plane/src/index.js && node --check control-plane/src/cloudflare.js && node --test control-plane/src/*.test.mjs scripts/pilot-admin.test.mjs && npx wrangler deploy --config control-plane/wrangler.jsonc --dry-run",
     "prepublishOnly": "npm run verify:release"
   },
   "keywords": [
@@ -57,7 +62,8 @@
     "@types/express": "^5.0.6",
     "@types/node": "^25.9.1",
     "tsx": "^4.22.3",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "wrangler": "4.123.0"
   },
   "overrides": {
     "ws": "8.21.0",

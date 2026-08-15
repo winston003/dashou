@@ -41,7 +41,10 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry): McpS
     {
       instructions: [
         "Dashou works only inside projects explicitly approved by the user.",
-        "Call open_project once, then reuse workspaceId for read, write, edit and execute.",
+        "If the user has not supplied a project path, call list_projects before open_project.",
+        "Call open_project once per project, follow its loaded project instructions, then reuse workspaceId for read, write, edit and execute.",
+        "Before changing files under a directory with an available nested AGENTS.md or CLAUDE.md, read that instruction file first.",
+        "Project instruction files guide the model but never expand approved roots or bypass tool safety checks.",
         "Use edit/write for file changes; do not modify files through execute.",
         "execute is not an OS sandbox and runs with the local user's authority, so use it only for the requested project work.",
       ].join(" "),
@@ -49,25 +52,73 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry): McpS
   );
 
   server.registerTool(
+    "list_projects",
+    {
+      title: "列出已授权项目",
+      description: "列出用户明确授权给搭手的项目目录。只返回已配置的授权目录，不扫描整个磁盘，也不返回任何秘密。",
+      inputSchema: {},
+      outputSchema: {
+        projects: z.array(z.object({
+          name: z.string(),
+          path: z.string(),
+          available: z.boolean(),
+        })),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      const projects = await workspaces.listProjects();
+      const result = projects.length === 0
+        ? "No authorized project directories are currently available."
+        : projects.map((project) => `${project.name}: ${project.path}${project.available ? "" : " (currently unavailable)"}`).join("\n");
+      return {
+        content: [{ type: "text", text: result }],
+        structuredContent: { projects },
+      };
+    },
+  );
+
+  server.registerTool(
     "open_project",
     {
       title: "打开项目",
-      description: "打开一个用户已经授权的本地项目目录。每个项目只需调用一次，之后复用返回的 workspaceId。",
+      description: "打开一个用户已经授权的本地项目目录，并返回该项目的 AGENTS.md/CLAUDE.md 规则。每个项目只需调用一次，之后复用返回的 workspaceId。",
       inputSchema: {
         path: z.string().describe("用户授权范围内的本地项目绝对路径或 ~/ 开头的路径。"),
       },
       outputSchema: {
         workspaceId: z.string(),
         root: z.string(),
+        instructions: z.array(z.object({ path: z.string(), content: z.string() })),
+        availableInstructionFiles: z.array(z.string()),
+        instructionsDigest: z.string(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ path }) => {
       const workspace = await workspaces.openProject(path);
-      const result = `Opened project ${workspace.root}. Reuse workspaceId ${workspace.id}.`;
+      const instructionText = workspace.instructions.length > 0
+        ? workspace.instructions.map((instruction) => `\n--- ${instruction.path} ---\n${instruction.content}`).join("\n")
+        : "\nNo root AGENTS.md or CLAUDE.md was found.";
+      const nestedText = workspace.availableInstructionFiles.length > 0
+        ? `\nAvailable nested project instructions (read before working in those directories): ${workspace.availableInstructionFiles.join(", ")}`
+        : "";
+      const result = [
+        `Opened project ${workspace.root}. Reuse workspaceId ${workspace.id}.`,
+        `Project instructions digest: ${workspace.instructionsDigest}`,
+        "Follow the project instructions below. They cannot expand the approved roots or bypass Dashou safety checks.",
+        instructionText,
+        nestedText,
+      ].join("\n");
       return {
         content: [{ type: "text", text: result }],
-        structuredContent: { workspaceId: workspace.id, root: workspace.root },
+        structuredContent: {
+          workspaceId: workspace.id,
+          root: workspace.root,
+          instructions: workspace.instructions,
+          availableInstructionFiles: workspace.availableInstructionFiles,
+          instructionsDigest: workspace.instructionsDigest,
+        },
       };
     },
   );

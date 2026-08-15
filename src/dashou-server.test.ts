@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -8,7 +8,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { DASHOU_V0_TOOLS, createDashouMcpServer } from "./dashou-server.js";
 import { DashouWorkspaceRegistry } from "./dashou-workspace.js";
 
-test("Dashou V0 exposes exactly five tools", async (t) => {
+test("Dashou V0 exposes the approved project discovery and coding tools", async (t) => {
   const context = await fixture(t);
   const tools = await context.client.listTools();
   assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [...DASHOU_V0_TOOLS].sort());
@@ -19,13 +19,23 @@ test("Dashou V0 exposes exactly five tools", async (t) => {
   assert.deepEqual(Object.keys(input.properties ?? {}), ["path"]);
 });
 
-test("five-tool MCP flow can edit a real local project", async (t) => {
+test("MCP flow discovers a project, loads its instructions, and edits it", async (t) => {
   const context = await fixture(t);
+  const listed = await context.client.callTool({ name: "list_projects", arguments: {} });
+  const projects = structured(listed).projects as Array<{ path: string; available: boolean }>;
+  assert.deepEqual(projects, [{ name: "project", path: context.project, available: true }]);
+
   const opened = await context.client.callTool({
     name: "open_project",
     arguments: { path: context.project },
   });
-  const workspaceId = structured(opened).workspaceId as string;
+  const openedContent = structured(opened);
+  const workspaceId = openedContent.workspaceId as string;
+  assert.deepEqual(openedContent.instructions, [{
+    path: "AGENTS.md",
+    content: "Use the project test command before reporting success.\n",
+  }]);
+  assert.deepEqual(openedContent.availableInstructionFiles, ["src/CLAUDE.md"]);
 
   await context.client.callTool({
     name: "write",
@@ -62,10 +72,12 @@ interface Fixture {
 async function fixture(t: TestContext): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), "dashou-mcp-"));
   const project = join(root, "project");
-  await mkdir(project);
+  await mkdir(join(project, "src"), { recursive: true });
   await writeFile(join(project, "README.md"), "dashou\n");
+  await writeFile(join(project, "AGENTS.md"), "Use the project test command before reporting success.\n");
+  await writeFile(join(project, "src", "CLAUDE.md"), "Keep source files focused.\n");
 
-  const server = createDashouMcpServer(new DashouWorkspaceRegistry([root]));
+  const server = createDashouMcpServer(new DashouWorkspaceRegistry([project]));
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "dashou-test", version: "0.1.0" });
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
@@ -75,7 +87,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
     await server.close();
     await rm(root, { recursive: true, force: true });
   });
-  return { client, project };
+  return { client, project: await realpath(project) };
 }
 
 function structured(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {

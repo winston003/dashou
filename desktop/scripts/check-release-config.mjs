@@ -12,8 +12,12 @@ if (!pubkey || pubkey.includes("REQUIRED") || pubkey.length < 100) {
 if (!config.plugins?.updater?.endpoints?.length) {
   throw new Error("Desktop release is blocked: configure a signed updater endpoint.");
 }
+if (process.platform === "darwin" && !process.env.APPLE_SIGNING_IDENTITY && !config.bundle?.macOS?.signingIdentity) {
+  throw new Error("Desktop release is blocked: configure a macOS signing identity or explicit ad-hoc identity.");
+}
 console.log(JSON.stringify({
   ok: true,
   updaterEndpoint: config.plugins.updater.endpoints[0],
   updaterKeyConfigured: true,
+  ...(process.platform === "darwin" ? { macSigningIdentityConfigured: true } : {}),
 }, null, 2));

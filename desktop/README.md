@@ -1,28 +1,41 @@
 # Dashou Desktop
 
-Dashou Desktop is the small Tauri launcher for the existing Dashou Node service. It is the user-facing distribution path; npm remains a developer and CLI distribution path.
+Dashou Desktop 是面向普通用户的 Tauri 安装包；npm 主要保留给开发者和管理员 CLI。
 
-The app bundles a reviewed Node 22 runtime, the built Dashou service and production dependencies, and a platform-matched cloudflared binary.
+应用内置经过固定版本与校验的 Node 22、Dashou 服务和对应平台的 `cloudflared`。用户配置、设备申请凭据、Tunnel/试用授权和 OAuth 状态只保存在 Tauri application data 目录；连接密码只在本机生成，不发送给控制面。
 
-User configuration and OAuth state live in the Tauri application data directory, not inside the installed application bundle. The desktop updater uses Tauri signed updater artifacts and never replaces the running service in place.
+## 首次使用
 
-## Local development
+```text
+安装 → 申请开通 → 等待管理员批准 → 选择一个或多个文件夹
+→ 开始使用 → 去 ChatGPT 连接 → 需要时复制授权密码
+```
 
-From the repository root:
+批准后，桌面端自动领取设备专属 Tunnel、MCP 地址和受控试用授权；保存成功后向 Worker 确认清除暂存密文。`.dashou-invite.json` 只保留为旧版本兼容与故障恢复入口。
 
-    npm run desktop:install
-    npm run desktop:dev
+应用启动时及每六小时检查 GitHub Release 更新。下载必须通过 Tauri 签名验证后才会安装和重启。
 
-To stage the runtime resources and build a local bundle:
+## 本地开发
 
-    DASHOU_CLOUDFLARED_BINARY=/absolute/path/to/cloudflared npm run desktop:build
+从仓库根目录运行：
 
-The build intentionally stops until a real Tauri updater public key is configured. Configure it only in the release environment using desktop/scripts/configure-release.mjs; never commit the updater private key.
+```bash
+npm run desktop:install
+npm run desktop:dev
+```
 
-The CI workflow builds separate macOS Apple Silicon and Intel `.app`/DMG artifacts plus a Windows NSIS installer. The macOS `.app` target is also required for Tauri updater artifacts. It downloads the pinned official Cloudflare 2026.6.1 release asset and verifies the SHA-256 of the executable that is staged into the bundle. The updater artifacts are signed by the Tauri updater key. Controlled pilot builds may be ad-hoc/unsigned at the platform level; Apple Developer ID/notarization and Windows Authenticode secrets are required before broad public distribution.
+本地测试控制面可以覆盖：
 
-Once a signed desktop release is published, the app checks for updates in the background at launch and every six hours. A user can also press “检查更新”; all updater downloads are verified by Tauri signatures before relaunch.
+```bash
+DASHOU_CONTROL_BASE_URL=http://127.0.0.1:8787 npm run desktop:dev
+```
 
-## First-run flow
+构建本地安装包：
 
-The user selects an authorized folder with the native folder picker, opens the connection-information section, enters the administrator-issued pilot connection code and assigned HTTPS public host, and optionally enters a Tunnel token. After the service is healthy, “连接 ChatGPT” copies the MCP address and opens ChatGPT; the user still pastes the address and completes OAuth themselves. The app stores the connection code and generated OAuth owner token in a private application-data file, starts the bundled service, and exposes only the existing five-tool MCP contract.
+```bash
+DASHOU_CLOUDFLARED_BINARY=/absolute/path/to/cloudflared npm run desktop:build
+```
+
+构建会在未配置真实 Tauri updater 公钥时停止。只在发布环境通过 `desktop/scripts/configure-release.mjs` 配置公钥；updater 私钥不得提交。
+
+CI 分别构建 macOS Apple Silicon、Intel 与 Windows NSIS 安装包，并校验固定的 Cloudflare `cloudflared` 资产。受控 macOS 内测包使用 Tauri 官方支持的 ad-hoc 签名，仍可能要求用户在“隐私与安全”中明确允许；面向广泛公众分发前必须换成 Apple Developer ID/notarization，并为 Windows 配置 Authenticode。
