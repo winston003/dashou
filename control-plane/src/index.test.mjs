@@ -298,7 +298,7 @@ test("Worker health exposes the deployment build SHA", async () => {
   assert.deepEqual(await response.json(), {
     ok: true,
     name: "dashou-pilot-control",
-    version: "0.1.2-rc9",
+    version: "0.1.2-rc10",
     buildSha: "abc123",
   });
 });

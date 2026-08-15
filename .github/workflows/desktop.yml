@@ -18,6 +18,19 @@ jobs:
         with:
           node-version: 22.22.3
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri Linux prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
       - run: npm ci
       - run: npm ci --prefix desktop
       - run: npm run verify:pilot-release
