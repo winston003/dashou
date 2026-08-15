@@ -8,6 +8,9 @@ test("GitHub update check compares release versions and selects the platform", (
   assert.equal(compareVersions("v0.1.0", "0.1.0"), 0);
   assert.equal(compareVersions("0.1.2-rc1", "0.1.2"), -1);
   assert.equal(compareVersions("0.1.2", "0.1.2-rc1"), 1);
+  assert.equal(compareVersions("0.1.2-rc11", "0.1.2-rc8"), -1);
+  assert.ok(compareVersions("0.1.3-rc.1", "0.1.2-rc8") > 0);
+  assert.ok(compareVersions("0.1.3-rc.11", "0.1.3-rc.8") > 0);
   assert.equal(updatePlatform("darwin", "arm64"), "darwin-aarch64");
   const result = updateCheck(
     "0.1.0",
