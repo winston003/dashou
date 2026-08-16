@@ -6,18 +6,27 @@
 
 管理员只向用户发送官方 GitHub Release 页面。每台电脑的独立子域名、Tunnel 和授权由控制面在批准时自动准备，不再由客服手工创建或传递。
 
-管理员首次部署控制面按 [control-plane/README.md](../control-plane/README.md) 完成。日常审核只需在自己的终端配置一次环境变量：
+管理员首次部署控制面按 [control-plane/README.md](../control-plane/README.md) 完成。完成 Cloudflare 登录后，管理员只需要在仓库根目录运行一次：
 
 ```bash
-export DASHOU_PILOT_CONTROL_URL='https://dashou-pilot-control.whilewon.workers.dev'
-export DASHOU_PILOT_CONTROL_ADMIN_TOKEN='只在管理员终端注入'
+npm run pilot:admin:setup
 ```
+
+这个脚本会自动生成并轮换管理员密钥、上传到 Cloudflare Worker、验证控制面，并把密钥保存在管理员本机
+`~/.dashou/pilot-admin.json`（权限 0600）。密钥不会输出、不会进入仓库，也不会发给用户。
 
 收到新申请后：
 
 ```bash
 dashou admin applications list
 dashou admin applications approve req_xxx --period month
+```
+
+如果直接使用仓库而不是已安装的 `dashou` 命令，对应写法是：
+
+```bash
+npm run pilot:admin -- applications list
+npm run pilot:admin -- applications approve req_xxx --period month
 ```
 
 也可以选择 `week`、`quarter` 或 `year`。这些是授权周期，不是假装已经完成支付。拒绝和撤销：
@@ -29,7 +38,22 @@ dashou admin applications revoke req_xxx
 
 管理员不接触用户的本地连接密码，也不把 Tunnel Token、试用 token 或其他密钥发到聊天里。
 
+## 申请问题怎么排查
+
+先运行：
+
+```bash
+dashou admin applications list
+```
+
+- 能看到申请编号：审批，或用 `dashou admin applications inspect req_xxx` 查看“收到申请 → 开始准备 → 已批准 → 设备领取 → 完成开通”的时间线。
+- 显示“待审核申请（0）”：让用户在申请步骤旁点击“复制排查信息”并发给管理员。它会说明客户端停在连接超时、无法连接、服务端拒绝或返回异常中的哪一类。
+
+排查信息只含状态、时间、客户端版本、平台、申请编号和错误类别；不含密码、Token、目录路径、文件内容或 ChatGPT 对话。不要让用户打开终端，也不要让用户发送 `application.json`、`auth.json` 或完整日志。
+
 ## 用户安装
+
+完整图文版见 [GETTING_STARTED.md](GETTING_STARTED.md)。
 
 用户只需要四步：
 
@@ -41,6 +65,13 @@ dashou admin applications revoke req_xxx
 Dashou 会自动复制连接地址并打开 ChatGPT。用户不需要安装 Node.js、`cloudflared`，
 也不需要填写公网地址、内测连接码或 Tunnel Token；ChatGPT 最后的添加和授权仍由用户在
 自己的账号页面确认。授权页需要密码时，回到 Dashou 点击“复制授权密码”即可。
+
+ChatGPT 个人插件页可直接打开：<https://chatgpt.com/plugins?view=personal>。
+当前页面显示“创建应用”按钮：点击它并粘贴搭手地址。如果没有“创建应用”，请打开 ChatGPT
+**设置 → 应用（Apps）→ 高级设置（Advanced settings）→ 开发者模式（Developer mode）**；工作区管理员可从 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）** 进入。
+官方路径可能随账号类型和工作区策略变化，参考 [OpenAI 官方说明](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt)。
+关闭搭手窗口只会把它收起到 macOS 顶部菜单栏，后台连接不会因此停止；要真正停止服务，
+请从菜单栏选择“退出搭手”。
 
 `.dashou-invite.json` 只作为旧版本兼容和故障恢复入口保留，不是正常内测流程。管理员明确要求时，用户才展开“已有管理员邀请文件”并导入。
 
@@ -162,11 +193,9 @@ curl -sS -X POST http://127.0.0.1:8787/admin/pilot/accounts \
 管理员可对 `/admin/pilot/accounts/pilot-alice` POST `{"enabled":false}` 禁用，或
 `{"revoke":true}` 撤销。控制面 token 和用户 token 都不要写进聊天、Issue 或日志。
 
-也可以使用仓库根目录的管理员命令代替手写 curl：
+也可以使用仓库根目录的管理员命令代替手写 curl。管理员配置完成后，不需要再手动设置环境变量：
 
 ```bash
-export DASHOU_PILOT_CONTROL_URL=https://dashou-pilot-control.whilewon.workers.dev
-export DASHOU_PILOT_CONTROL_ADMIN_TOKEN='只在管理员终端注入'
 npm run pilot:admin -- list
 npm run pilot:admin -- create pilot-alice 2026-09-01T00:00:00.000Z
 npm run pilot:admin -- disable pilot-alice
@@ -210,7 +239,7 @@ https://xxx.warmbyte.studio/mcp
 ```
 
 桌面安装包的首次设置只需要申请开通和添加一个或多个文件夹。服务准备好后，
-点击“去 ChatGPT 连接”会复制连接地址并打开 ChatGPT 官方 Plugins 页面。用户在 ChatGPT 中点击“+”并粘贴地址，随后完成最终添加和授权；授权页需要密码时，回到 Dashou 点击“复制授权密码”再粘贴。若页面没有“+”，在 ChatGPT 的“设置 → 安全与登录”中开启开发者模式；该开关是否可用取决于账号和工作区策略。
+点击“去 ChatGPT 连接”会复制连接地址并打开 ChatGPT 官方 Plugins 页面。用户在 ChatGPT“个人”页点击“创建应用”并粘贴地址，随后完成最终添加和授权；授权页需要密码时，回到 Dashou 点击“复制授权密码”再粘贴。若页面没有“创建应用”，按账号类型在 ChatGPT 的“设置 → 应用（Apps）→ 高级设置（Advanced settings）”开启开发者模式，或由工作区管理员从“工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）”进入。
 
 连接后模型只能看到六个工具：
 

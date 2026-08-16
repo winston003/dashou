@@ -12,3 +12,5 @@ desktop/vendor/**
 desktop/dist-ui/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
+.playwright-cli/
+output/

@@ -27,6 +27,8 @@ for (const required of [
   "package/dist/dashou-server.js",
   "package/scripts/create-pilot-invite.mjs",
   "package/scripts/pilot-admin.mjs",
+  "package/scripts/pilot-admin-config.mjs",
+  "package/scripts/setup-pilot-admin.mjs",
 ]) {
   if (!entries.split("\n").includes(required)) throw new Error(`final package is missing ${required}`);
 }

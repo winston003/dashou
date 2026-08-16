@@ -1,6 +1,6 @@
 {
   "name": "@warmbyte/dashou",
-  "version": "0.1.3-rc.1",
+  "version": "0.1.3-rc.2",
   "description": "让 ChatGPT 安全地读取、修改并执行你授权的本地项目。",
   "type": "module",
   "main": "dist/dashou-server.js",
@@ -14,6 +14,8 @@
     "dist",
     "scripts/create-pilot-invite.mjs",
     "scripts/pilot-admin.mjs",
+    "scripts/pilot-admin-config.mjs",
+    "scripts/setup-pilot-admin.mjs",
     "docs/PILOT.md",
     "README.md",
     "LICENSE"
@@ -41,9 +43,10 @@
     "desktop:dev": "npm run tauri:dev --prefix desktop",
     "desktop:build": "npm run tauri:build --prefix desktop",
     "pilot:admin": "node scripts/pilot-admin.mjs",
+    "pilot:admin:setup": "node scripts/setup-pilot-admin.mjs",
     "pilot:invite": "node scripts/create-pilot-invite.mjs",
     "deploy:control-plane": "node scripts/deploy-control-plane.mjs",
-    "verify:control-plane": "node --check control-plane/src/index.js && node --check control-plane/src/cloudflare.js && node --test control-plane/src/*.test.mjs scripts/pilot-admin.test.mjs && npx wrangler deploy --config control-plane/wrangler.jsonc --dry-run",
+    "verify:control-plane": "node --check control-plane/src/index.js && node --check control-plane/src/cloudflare.js && node --test control-plane/src/*.test.mjs scripts/pilot-admin.test.mjs scripts/pilot-admin-config.test.mjs && npx wrangler deploy --config control-plane/wrangler.jsonc --dry-run",
     "prepublishOnly": "npm run verify:release"
   },
   "keywords": [

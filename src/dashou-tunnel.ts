@@ -5,6 +5,7 @@ export interface CloudflaredRunSpec {
   command: string;
   args: string[];
   env: NodeJS.ProcessEnv;
+  windowsHide: true;
 }
 
 export interface RunningCloudflareTunnel {
@@ -23,6 +24,7 @@ export function cloudflaredRunSpec(token: string, environment: NodeJS.ProcessEnv
       ...environment,
       TUNNEL_TOKEN: normalized,
     },
+    windowsHide: true,
   };
 }
 
@@ -31,6 +33,7 @@ export function cloudflaredVersion(environment: NodeJS.ProcessEnv = process.env)
     return execFileSync(environment.DASHOU_CLOUDFLARED_PATH?.trim() || "cloudflared", ["--version"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
     }).trim();
   } catch {
     return undefined;
@@ -42,6 +45,7 @@ export function startCloudflareTunnel(token: string): RunningCloudflareTunnel {
   const child = spawn(spec.command, spec.args, {
     env: spec.env,
     stdio: ["ignore", "inherit", "inherit"],
+    windowsHide: spec.windowsHide,
   });
 
   child.on("error", (error) => {

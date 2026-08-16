@@ -208,6 +208,32 @@ test("pending device application can be rejected with a user-facing reason", asy
   });
 });
 
+test("admin can inspect a safe application timeline but unauthenticated callers cannot", async () => {
+  const env = { DB: new FakeD1(), PILOT_ADMIN_TOKEN: ADMIN_TOKEN };
+  const applicationToken = "T".repeat(43);
+  const create = await request("POST", "/applications", {
+    env,
+    body: {
+      applicationToken,
+      deviceId: `dev_${"t".repeat(24)}`,
+      deviceName: "Timeline Mac",
+      platform: "macos-arm64",
+    },
+  });
+  const created = await create.json();
+  const unauthorized = await request("GET", `/admin/applications/${created.applicationId}`, { env });
+  assert.equal(unauthorized.status, 401);
+  const response = await request("GET", `/admin/applications/${created.applicationId}`, { env, token: ADMIN_TOKEN });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.application.applicationId, created.applicationId);
+  assert.equal(payload.application.createdAt, created.createdAt);
+  assert.equal(payload.application.updatedAt, created.createdAt);
+  assert.equal(payload.application.applicationToken, undefined);
+  assert.equal(payload.application.activationCiphertext, undefined);
+  assert.equal(JSON.stringify(payload).includes(applicationToken), false);
+});
+
 test("failed device provisioning returns the application to pending for a safe retry", async () => {
   const db = new FakeD1();
   const env = {
@@ -298,7 +324,7 @@ test("Worker health exposes the deployment build SHA", async () => {
   assert.deepEqual(await response.json(), {
     ok: true,
     name: "dashou-pilot-control",
-    version: "0.1.3-rc.1",
+    version: "0.1.3-rc.2",
     buildSha: "abc123",
   });
 });

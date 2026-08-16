@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 const setup = $("setup");
 const ready = $("ready");
 const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
-const CHATGPT_APPS_URL = "https://chatgpt.com/plugins";
+const CHATGPT_APPS_URL = "https://chatgpt.com/plugins?view=personal";
 let updatePromise;
 let refreshPromise;
 let currentMcpUrl;
@@ -20,6 +20,10 @@ let accessState = { status: "not_applied" };
 let applying = false;
 let selectedRoots = [];
 let restarting = false;
+let savedRootsBeforeEditing = [];
+let hasSavedConfiguration = false;
+let applicationStatusFailureRecorded = false;
+let activationRecorded = false;
 
 function errorText(error) {
   if (typeof error === "string") return error;
@@ -71,6 +75,36 @@ function showReadyFailure(error) {
 
 function showSetupError(error) {
   $("setup-error").textContent = friendlyError(error, "这一步没有完成，请再试一次。");
+}
+
+function diagnosticErrorCode(error) {
+  return /\[([A-Z0-9_]{3,48})\]/.exec(errorText(error))?.[1] || "CLIENT_UNKNOWN";
+}
+
+function clearAccessError() {
+  $("access-error").textContent = "";
+  $("diagnostic-status").textContent = "";
+  $("access-feedback").classList.add("hidden");
+}
+
+function showAccessError(error) {
+  const code = diagnosticErrorCode(error);
+  const messages = {
+    CONTROL_TIMEOUT: "连接超时了。请检查网络后重新尝试。",
+    CONTROL_CONNECT: "暂时联系不到搭手服务。请检查网络后重新尝试。",
+    CONTROL_RESPONSE_INVALID: "搭手服务返回了异常结果，请稍后重试。",
+  };
+  $("access-error").textContent = messages[code]
+    || (code.startsWith("CONTROL_HTTP_") ? "申请没有被服务接受，请稍后重新尝试。" : "申请没有成功发送，请重新尝试。");
+  $("access-feedback").classList.remove("hidden");
+}
+
+async function recordEvent(stage, outcome = "ok", errorCode, applicationId) {
+  try {
+    await invoke("record_client_event", { stage, outcome, errorCode: errorCode || null, applicationId: applicationId || null });
+  } catch {
+    // Diagnostics must never interrupt the user's primary action.
+  }
 }
 
 function uniqueRoots(roots) {
@@ -137,22 +171,29 @@ function renderSetupState() {
   } else {
     accessStatus.textContent = applying ? "正在发送申请" : "尚未申请";
     accessStatus.className = applying ? "setup-status waiting" : "setup-status";
-    applyButton.textContent = applying ? "正在申请" : "申请开通";
+    applyButton.textContent = applying ? "正在提交…" : "开始申请";
     applyButton.disabled = applying;
   }
   $("save-start").disabled = !(accessReady && hasRoots);
+  $("cancel-setup").classList.toggle("hidden", !hasSavedConfiguration);
   renderRoots();
 }
 
 async function loadSetupState() {
   let existing = await invoke("configuration");
+  hasSavedConfiguration = Boolean(existing);
   if (existing) {
     if (selectedRoots.length === 0) selectedRoots = uniqueRoots(existing.allowedRoots || []);
     accessReady = Boolean(existing.hasPilotToken);
   }
   try {
     accessState = await invoke("application_status");
+    applicationStatusFailureRecorded = false;
     if (accessState.status === "activated") {
+      if (!activationRecorded) {
+        activationRecorded = true;
+        void recordEvent("activation_completed", "ok", null, accessState.applicationId);
+      }
       existing = await invoke("configuration");
       accessReady = Boolean(existing?.hasPilotToken);
     } else if (accessState.status !== "not_applied") {
@@ -160,7 +201,11 @@ async function loadSetupState() {
     }
   } catch (error) {
     if (!accessReady && !["pending", "provisioning"].includes(accessState.status)) {
-      $("setup-error").textContent = friendlyError(error, "暂时无法查看申请进度，请稍后再试。");
+      showAccessError(error);
+      if (!applicationStatusFailureRecorded) {
+        applicationStatusFailureRecorded = true;
+        void recordEvent("application_status_failed", "error", diagnosticErrorCode(error), accessState.applicationId);
+      }
     }
   }
   renderSetupState();
@@ -255,6 +300,7 @@ async function refresh() {
 $("save-start").addEventListener("click", async () => {
   $("setup-error").textContent = "";
   configuring = true;
+  void recordEvent("runtime_start_started");
   let saved = false;
   try {
     await invoke("configure", {
@@ -267,11 +313,14 @@ $("save-start").addEventListener("click", async () => {
       },
     });
     saved = true;
+    hasSavedConfiguration = true;
     await invoke("take_over_daemon");
     await invoke("start_daemon");
+    void recordEvent("runtime_started");
     configuring = false;
     await refresh();
   } catch (error) {
+    void recordEvent("runtime_start_failed", "error", diagnosticErrorCode(error), accessState.applicationId);
     configuring = false;
     if (saved) showReadyFailure(error);
     else showSetupError(error);
@@ -282,11 +331,15 @@ $("apply-access").addEventListener("click", async () => {
   if (applying || accessReady) return;
   applying = true;
   $("setup-error").textContent = "";
+  clearAccessError();
+  void recordEvent("application_submit_started");
   renderSetupState();
   try {
     accessState = await invoke("apply_for_access");
+    void recordEvent("application_submitted", "ok", null, accessState.applicationId);
   } catch (error) {
-    showSetupError(error);
+    showAccessError(error);
+    void recordEvent("application_submit_failed", "error", diagnosticErrorCode(error));
   } finally {
     applying = false;
     renderSetupState();
@@ -300,6 +353,7 @@ $("choose-folder").addEventListener("click", async () => {
     const roots = Array.isArray(selected) ? selected : typeof selected === "string" ? [selected] : [];
     if (roots.length > 0) {
       selectedRoots = uniqueRoots([...selectedRoots, ...roots]);
+      void recordEvent("folders_selected");
       renderSetupState();
     }
   } catch (error) {
@@ -344,9 +398,10 @@ $("restart-daemon").addEventListener("click", async () => {
 });
 
 $("reconfigure").addEventListener("click", async () => {
+  savedRootsBeforeEditing = [...selectedRoots];
   configuring = true;
-  await invoke("stop_daemon");
   const existing = await invoke("configuration");
+  hasSavedConfiguration = Boolean(existing);
   if (existing) {
     selectedRoots = uniqueRoots(existing.allowedRoots || []);
     accessReady = Boolean(existing.hasPilotToken);
@@ -354,6 +409,14 @@ $("reconfigure").addEventListener("click", async () => {
   setup.classList.remove("hidden");
   ready.classList.add("hidden");
   renderSetupState();
+});
+
+$("cancel-setup").addEventListener("click", async () => {
+  selectedRoots = [...savedRootsBeforeEditing];
+  configuring = false;
+  setup.classList.add("hidden");
+  ready.classList.remove("hidden");
+  await refresh();
 });
 
 $("copy-code").addEventListener("click", async () => {
@@ -364,6 +427,7 @@ $("copy-code").addEventListener("click", async () => {
       return;
     }
     await writeText(code, { label: "Dashou 连接密码" });
+    void recordEvent("connection_password_copied");
     $("message").textContent = "授权密码已复制，请在 ChatGPT 授权页粘贴。";
   } catch (error) {
     $("message").textContent = "授权密码没有复制成功，请再试一次。";
@@ -391,9 +455,20 @@ $("connect-chatgpt").addEventListener("click", async () => {
   if (!(await copyMcpAddress())) return;
   try {
     await openExternal(CHATGPT_APPS_URL);
-    $("message").textContent = "ChatGPT 已打开：点击“+”并粘贴地址。需要密码时，回到这里点击“复制授权密码”；若看不到“+”，请在 ChatGPT 设置 → 安全与登录中开启开发者模式。";
+    void recordEvent("chatgpt_opened");
+    $("message").textContent = "ChatGPT 已打开：在“个人”页点击“创建应用”并粘贴地址。需要密码时，回到这里点击“复制授权密码”；若看不到“创建应用”，请在 ChatGPT 设置 → 应用（Apps）→ 高级设置（Advanced settings）中开启开发者模式。";
   } catch {
     $("message").textContent = "ChatGPT 没有打开，请稍后再试。";
+  }
+});
+
+$("copy-diagnostics").addEventListener("click", async () => {
+  try {
+    const report = await invoke("diagnostic_report");
+    await writeText(JSON.stringify(report, null, 2), { label: "Dashou 排查信息" });
+    $("diagnostic-status").textContent = "已复制，请发给管理员。";
+  } catch {
+    $("diagnostic-status").textContent = "复制失败，请再试一次。";
   }
 });
 
@@ -401,6 +476,8 @@ $("check-update").addEventListener("click", async () => {
   $("message").textContent = "正在检查更新…";
   await checkAndInstallUpdate();
 });
+
+void recordEvent("app_opened");
 
 refresh().catch((error) => {
   showSetupError(error);

@@ -17,6 +17,7 @@ input:focus { outline: 2px solid #d5a679; outline-offset: 1px; }
 button { margin-top: 21px; padding: 10px 15px; border: 1px solid #d4c7b7; border-radius: 9px; background: #fffdf9; color: #443b32; font: inherit; cursor: pointer; }
 button:hover { background: #f3e9dc; }
 button.primary { border-color: #9b6339; background: #9b6339; color: white; }
+button.secondary { display: block; margin-top: 10px; width: 100%; }
 .path-picker { display: flex; gap: 8px; align-items: center; }
 .path-picker input { flex: 1; min-width: 0; }
 .path-picker button { flex: 0 0 auto; margin-top: 7px; }
@@ -26,6 +27,10 @@ button.primary { border-color: #9b6339; background: #9b6339; color: white; }
 .step-copy span { color: #81776c; font-size: 12px; font-weight: 400; }
 .setup-step button { margin-top: 0; white-space: nowrap; }
 .setup-step .roots-picker { grid-column: 2 / 4; min-width: 0; }
+.access-feedback { grid-column: 2 / 4; padding: 11px 12px; border: 1px solid #edc9bd; border-radius: 10px; background: #fff6f2; color: #92382e; font-size: 12px; line-height: 1.5; }
+.access-feedback p { margin: 0; }
+.access-feedback button.compact { display: inline-block; width: auto; margin: 9px 8px 0 0; padding: 7px 10px; }
+.access-feedback span { color: #6d5c4b; }
 .roots-picker { display: grid; gap: 8px; }
 .roots-list { display: grid; gap: 7px; }
 .roots-empty { margin: 0; padding: 11px 12px; border: 1px dashed #d8cec0; border-radius: 9px; color: #948b81; font-size: 12px; }
@@ -54,6 +59,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .muted { color: #948b81; font-weight: 400; }
 .error { min-height: 1.2em; color: #a43e32; }
 .message { min-height: 1.2em; color: #6d5c4b; }
+.resident-note { margin: 18px 0 0; color: #948b81; font-size: 12px; line-height: 1.5; }
 .status-row { display: flex; align-items: center; gap: 9px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: #d9a24f; }
 .dot.ok { background: #5d9a69; }

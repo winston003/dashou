@@ -218,13 +218,38 @@ jobs:
           token: ${{ secrets.DASHOU_RELEASES_TOKEN }}
           generate_release_notes: true
           body: |
-            ## 安装
+            ## 下载
 
-            - Apple 芯片 Mac：下载 `darwin-aarch64.dmg`
-            - Intel Mac：下载 `darwin-x86_64.dmg`
-            - Windows 10/11：下载 `windows-x86_64-setup.exe`
+            - [Mac Apple Silicon](https://github.com/winston003/dashou-releases/releases/download/desktop-${{ steps.release.outputs.version }}/dashou-${{ steps.release.outputs.version }}-darwin-aarch64.dmg)
+            - [Mac Intel](https://github.com/winston003/dashou-releases/releases/download/desktop-${{ steps.release.outputs.version }}/dashou-${{ steps.release.outputs.version }}-darwin-x86_64.dmg)
+            - [Windows](https://github.com/winston003/dashou-releases/releases/download/desktop-${{ steps.release.outputs.version }}/dashou-${{ steps.release.outputs.version }}-windows-x86_64-setup.exe)
 
-            安装后打开搭手，点击“申请开通”，等待管理员同意；然后选择一个或多个工作文件夹，点击“开始使用”和“去 ChatGPT 连接”。用户无需填写公网地址、连接码或 Tunnel Token。
+            ## 5 分钟开始使用
 
-            如果 ChatGPT 授权页要求密码，回到搭手点击“复制授权密码”。
+            1. 安装并打开搭手，点击“申请开通”。
+            2. 管理员同意后，点击“添加文件夹”，选择一个或多个工作文件夹，再点击“开始使用”。
+            3. 点击“去 ChatGPT 连接”。搭手会自动复制地址并打开 ChatGPT。
+            4. 在 ChatGPT“个人”页点击“创建应用”，粘贴地址；需要密码时回到搭手点击“复制授权密码”。
+
+            [打开 ChatGPT 插件页](https://chatgpt.com/plugins?view=personal)
+
+            ![搭手首次设置](https://raw.githubusercontent.com/winston003/dashou/${{ github.ref_name }}/docs/images/first-setup.jpg)
+
+            ![搭手已准备好](https://raw.githubusercontent.com/winston003/dashou/${{ github.ref_name }}/docs/images/ready-to-connect.jpg)
+
+            如果看不到“创建应用”：打开 ChatGPT **设置 → 应用（Apps）→ 高级设置（Advanced settings）→ 开发者模式（Developer mode）**；工作区管理员可从 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）** 进入。
+
+            官方说明：[Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt)
+
+            关闭窗口只会把搭手收起到 macOS 顶部菜单栏，不会停止本地服务。需要停止服务时，在菜单栏选择“退出搭手”。
+
+            ## 最近变化
+
+            - 修复 Windows 正式版启动时弹出黑色控制台窗口的问题。
+            - 申请失败时可直接复制隐私安全的排查信息给客服。
+            - 支持选择多个工作文件夹。
+            - 关闭窗口后继续驻留菜单栏，只有选择“退出搭手”才停止服务。
+            - 安装包内置 Node.js 和 `cloudflared`，用户不需要另行安装。
+
+            完整图文说明：[GETTING_STARTED.md](https://github.com/winston003/dashou/blob/${{ github.ref_name }}/docs/GETTING_STARTED.md)
           files: release-assets/*

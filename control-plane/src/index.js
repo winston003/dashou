@@ -6,7 +6,7 @@ const APPLICATION_ID_PATTERN = /^req_[A-Za-z0-9_-]{16,64}$/;
 const DEVICE_ID_PATTERN = /^dev_[A-Za-z0-9_-]{16,96}$/;
 const APPLICATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/;
 const PERIODS = new Set(["week", "month", "quarter", "year"]);
-const CONTROL_PLANE_VERSION = "0.1.3-rc.1";
+const CONTROL_PLANE_VERSION = "0.1.3-rc.2";
 const DEFAULT_LEASE_TTL_SECONDS = 15 * 60;
 
 export default {
@@ -51,6 +51,10 @@ async function routeRequest(request, env) {
   }
 
   if (url.pathname === "/admin/applications" && request.method === "GET") return adminApplicationList(request, env, url);
+  const adminApplicationMatch = /^\/admin\/applications\/([^/]+)$/.exec(url.pathname);
+  if (adminApplicationMatch && request.method === "GET") {
+    return adminApplicationDetail(request, env, decodeURIComponent(adminApplicationMatch[1]));
+  }
   const approveMatch = /^\/admin\/applications\/([^/]+)\/approve$/.exec(url.pathname);
   if (approveMatch && request.method === "POST") {
     return adminApproveApplication(request, env, decodeURIComponent(approveMatch[1]));
@@ -163,6 +167,14 @@ async function adminApplicationList(request, env, url) {
     : env.DB.prepare("SELECT * FROM pilot_applications ORDER BY created_at");
   const result = await statement.all();
   return json({ applications: (result.results ?? []).map(adminApplicationSummary) });
+}
+
+async function adminApplicationDetail(request, env, applicationId) {
+  requireAdmin(request, env);
+  validateApplicationId(applicationId);
+  const row = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
+  if (!row) throw new HttpError(404, `Application not found: ${applicationId}`);
+  return json({ application: adminApplicationSummary(row) });
 }
 
 async function adminApproveApplication(request, env, applicationId) {
@@ -305,6 +317,9 @@ function adminApplicationSummary(row) {
     platform: row.platform,
     ...(row.contact ? { contact: row.contact } : {}),
     ...(row.account_id ? { accountId: row.account_id } : {}),
+    ...(row.provisioning_started_at ? { provisioningStartedAt: row.provisioning_started_at } : {}),
+    ...(row.activation_started_at ? { activationStartedAt: row.activation_started_at } : {}),
+    ...(row.updated_at ? { updatedAt: row.updated_at } : {}),
   };
 }
 

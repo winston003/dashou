@@ -1,14 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, RunEvent, State};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tauri::menu::{Menu, MenuItemBuilder};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
 
 struct DaemonState(Mutex<Option<Child>>);
 
@@ -137,6 +140,84 @@ struct ActivationResponse {
 #[derive(Debug, Deserialize)]
 struct ApiError {
     error: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticEvent {
+    unix_seconds: u64,
+    stage: String,
+    outcome: String,
+    app_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    application_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticReport {
+    product: &'static str,
+    app_version: String,
+    platform: String,
+    events: Vec<DiagnosticEvent>,
+    privacy: &'static str,
+}
+
+const DIAGNOSTIC_STAGES: &[&str] = &[
+    "app_opened",
+    "application_submit_started",
+    "application_submitted",
+    "application_submit_failed",
+    "application_status_failed",
+    "activation_completed",
+    "folders_selected",
+    "runtime_start_started",
+    "runtime_started",
+    "runtime_start_failed",
+    "chatgpt_opened",
+    "connection_password_copied",
+];
+
+#[tauri::command]
+fn record_client_event(
+    app: AppHandle,
+    stage: String,
+    outcome: String,
+    error_code: Option<String>,
+    application_id: Option<String>,
+) -> Result<(), String> {
+    validate_diagnostic_event(
+        &stage,
+        &outcome,
+        error_code.as_deref(),
+        application_id.as_deref(),
+    )?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    append_diagnostic_event(
+        &data_dir,
+        DiagnosticEvent {
+            unix_seconds: unix_seconds(),
+            stage,
+            outcome,
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            error_code,
+            application_id,
+        },
+    )
+}
+
+#[tauri::command]
+fn diagnostic_report(app: AppHandle) -> Result<DiagnosticReport, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    Ok(build_diagnostic_report(&data_dir))
 }
 
 #[tauri::command]
@@ -1124,7 +1205,7 @@ async fn control_request<T: serde::de::DeserializeOwned>(
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(30))
         .build()
-        .map_err(|_| "暂时无法准备网络连接，请稍后再试".to_string())?;
+        .map_err(|_| "[CONTROL_CONNECT] 暂时无法准备网络连接，请稍后再试".to_string())?;
     let mut request = client
         .request(method, url)
         .header(reqwest::header::ACCEPT, "application/json");
@@ -1134,23 +1215,117 @@ async fn control_request<T: serde::de::DeserializeOwned>(
     if let Some(value) = body {
         request = request.json(&value);
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|_| "暂时无法联系搭手服务，请检查网络后重试".to_string())?;
+    let response = request.send().await.map_err(|error| {
+        if error.is_timeout() {
+            "[CONTROL_TIMEOUT] 联系搭手服务超时，请检查网络后重试".to_string()
+        } else {
+            "[CONTROL_CONNECT] 暂时无法联系搭手服务，请检查网络后重试".to_string()
+        }
+    })?;
     let status = response.status();
     let text = response
         .text()
         .await
-        .map_err(|_| "搭手服务返回了无法读取的结果".to_string())?;
+        .map_err(|_| "[CONTROL_RESPONSE_INVALID] 搭手服务返回了无法读取的结果".to_string())?;
     if !status.is_success() {
         let message = serde_json::from_str::<ApiError>(&text)
             .ok()
             .and_then(|value| value.error)
             .unwrap_or_else(|| "申请暂时没有完成".into());
-        return Err(format!("搭手服务返回 {}：{}", status.as_u16(), message));
+        return Err(format!(
+            "[CONTROL_HTTP_{}] 搭手服务返回 {}：{}",
+            status.as_u16(),
+            status.as_u16(),
+            message
+        ));
     }
-    serde_json::from_str(&text).map_err(|_| "搭手服务返回了无法识别的结果".to_string())
+    serde_json::from_str(&text)
+        .map_err(|_| "[CONTROL_RESPONSE_INVALID] 搭手服务返回了无法识别的结果".to_string())
+}
+
+fn validate_diagnostic_event(
+    stage: &str,
+    outcome: &str,
+    error_code: Option<&str>,
+    application_id: Option<&str>,
+) -> Result<(), String> {
+    if !DIAGNOSTIC_STAGES.contains(&stage) {
+        return Err("不支持的诊断阶段".into());
+    }
+    if !matches!(outcome, "ok" | "error") {
+        return Err("不支持的诊断结果".into());
+    }
+    if let Some(code) = error_code {
+        if code.len() > 48
+            || code.len() < 3
+            || !code
+                .chars()
+                .all(|value| value.is_ascii_uppercase() || value.is_ascii_digit() || value == '_')
+        {
+            return Err("不支持的诊断错误代码".into());
+        }
+    }
+    if let Some(id) = application_id {
+        if id.len() > 68
+            || !id.starts_with("req_")
+            || !id
+                .chars()
+                .all(|value| value.is_ascii_alphanumeric() || value == '_' || value == '-')
+        {
+            return Err("不支持的申请编号".into());
+        }
+    }
+    Ok(())
+}
+
+fn append_diagnostic_event(data_dir: &Path, event: DiagnosticEvent) -> Result<(), String> {
+    let logs_dir = data_dir.join("logs");
+    fs::create_dir_all(&logs_dir).map_err(|error| error.to_string())?;
+    let path = logs_dir.join("desktop-events.jsonl");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| error.to_string())?;
+    }
+    serde_json::to_writer(&mut file, &event).map_err(|error| error.to_string())?;
+    file.write_all(b"\n").map_err(|error| error.to_string())
+}
+
+fn build_diagnostic_report(data_dir: &Path) -> DiagnosticReport {
+    let path = data_dir.join("logs").join("desktop-events.jsonl");
+    let events = fs::read_to_string(path)
+        .ok()
+        .map(|text| {
+            let mut events = text
+                .lines()
+                .filter_map(|line| serde_json::from_str::<DiagnosticEvent>(line).ok())
+                .collect::<Vec<_>>();
+            if events.len() > 20 {
+                events.drain(..events.len() - 20);
+            }
+            events
+        })
+        .unwrap_or_default();
+    DiagnosticReport {
+        product: "Dashou Desktop",
+        app_version: env!("CARGO_PKG_VERSION").into(),
+        platform: platform_name(),
+        events,
+        privacy: "仅含状态、时间、版本、平台和错误类别；不含密码、Token、目录路径、文件内容或 ChatGPT 对话。",
+    }
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn save_activation(config_dir: &Path, activation: &ActivationResponse) -> Result<(), String> {
@@ -1348,11 +1523,37 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(DaemonState(Mutex::new(None)))
+        .setup(|app| {
+            let show_item = MenuItemBuilder::with_id("show", "显示搭手").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "退出搭手").build(app)?;
+            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let mut tray = TrayIconBuilder::new()
+                .menu(&menu)
+                .show_menu_on_left_click(true)
+                .tooltip("搭手 Dashou")
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                });
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray = tray.icon(icon).icon_as_template(true);
+            }
+            tray.build(app)?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             status,
             connection_code,
             apply_for_access,
             application_status,
+            record_client_event,
+            diagnostic_report,
             configuration,
             import_invite,
             configure,
@@ -1360,6 +1561,15 @@ pub fn run() {
             stop_daemon,
             take_over_daemon
         ])
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                // Closing the window is intentionally a hide action. The
+                // local MCP service remains available from the menu-bar tray
+                // until the user explicitly chooses "退出搭手".
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building Dashou desktop application")
         .run(|app, event| {
@@ -1374,7 +1584,6 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn make_resource_tree(root: &Path) {
         for (directory, file) in [
@@ -1422,7 +1631,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.3-rc.1".into(),
+            version: "0.1.3-rc.2".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -1432,6 +1641,60 @@ mod tests {
         let json = serde_json::to_value(status).expect("serialize status");
         assert!(json.get("connectionCode").is_none());
         assert!(json.get("ownerToken").is_none());
+    }
+
+    #[test]
+    fn diagnostic_report_contains_only_allowlisted_event_fields() {
+        let root = test_root("diagnostics");
+        append_diagnostic_event(
+            &root,
+            DiagnosticEvent {
+                unix_seconds: 1_786_838_400,
+                stage: "application_submit_failed".into(),
+                outcome: "error".into(),
+                app_version: "0.1.3-rc.2".into(),
+                error_code: Some("CONTROL_CONNECT".into()),
+                application_id: None,
+            },
+        )
+        .expect("write diagnostic event");
+        let report = build_diagnostic_report(&root);
+        let json = serde_json::to_string(&report).expect("serialize diagnostic report");
+        assert!(json.contains("CONTROL_CONNECT"));
+        assert!(!json.contains("token"));
+        assert!(!json.contains("/Users/"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(root.join("logs").join("desktop-events.jsonl"))
+                    .expect("diagnostic metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        fs::remove_dir_all(root).expect("remove diagnostic test directory");
+    }
+
+    #[test]
+    fn diagnostic_events_reject_free_form_sensitive_values() {
+        assert!(validate_diagnostic_event(
+            "application_submit_failed",
+            "error",
+            Some("CONTROL_TIMEOUT"),
+            Some("req_abcdefghijklmnop")
+        )
+        .is_ok());
+        assert!(validate_diagnostic_event("custom_path", "ok", None, None).is_err());
+        assert!(validate_diagnostic_event(
+            "application_submit_failed",
+            "error",
+            Some("password=secret"),
+            None
+        )
+        .is_err());
     }
 
     #[test]
