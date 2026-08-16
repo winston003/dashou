@@ -71,6 +71,20 @@ ChatGPT 插件页：[直接打开](https://chatgpt.com/plugins?view=personal)。
 6. 发布到独立公开仓库 `winston003/dashou-releases`，生成 updater `latest.json` 和安装文件。
 7. 用一台全新/清理过应用数据的电脑走完申请、审批、自动领取、ChatGPT OAuth 和第一个真实任务。
 
+## macOS 签名与公证凭据（仅维护者）
+
+这些凭据只存在于 GitHub Actions Secrets，普通用户不会看到，也不会输入 Apple 账号信息。CI 使用 App Store Connect API Key 公证，不使用 Apple 账号专用密码：
+
+- `APPLE_CERTIFICATE`：`Developer ID Application` `.p12` 的 Base64 内容。
+- `APPLE_CERTIFICATE_PASSWORD`：导出 `.p12` 时设置的密码。
+- `APPLE_API_KEY_CONTENT`：App Store Connect API Key 私钥 `.p8` 的 Base64 内容。
+- `APPLE_API_KEY`：API Key 的 Key ID。
+- `APPLE_API_ISSUER`：App Store Connect 的 Issuer ID。
+
+Tauri 官方支持这组三项 API Key 变量进行 macOS 公证；API Key 应创建为 Developer access，并且 `.p8` 私钥只能下载一次，必须立即安全保存。参见 [Tauri macOS signing](https://tauri.app/distribute/sign/macos/)。
+
+不要把 `APPLE_ID`、`APPLE_PASSWORD` 或 `APPLE_TEAM_ID` 放进这个仓库的 CI；Apple ID 方式只作为维护者本地排障的备用方式。
+
 ## 发布前命令
 
 ```bash
