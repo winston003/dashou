@@ -28,6 +28,7 @@ let applicationStatusFailureRecorded = false;
 let activationRecorded = false;
 let runtimeStartFailed = false;
 let runtimeHealthRecorded = false;
+let runtimeAutoStartAttempted = false;
 
 function errorText(error) {
   if (typeof error === "string") return error;
@@ -291,7 +292,8 @@ async function refresh() {
       await loadSetupState();
       return;
     }
-    if (!current.running && !runtimeStartFailed) {
+    if (!current.running && !runtimeStartFailed && !runtimeAutoStartAttempted) {
+      runtimeAutoStartAttempted = true;
       try {
         await invoke("start_daemon");
       } catch (error) {
@@ -301,6 +303,7 @@ async function refresh() {
       }
     }
     const actual = await invoke("status");
+    if (runtimeAutoStartAttempted && !actual.running) runtimeStartFailed = true;
     setup.classList.add("hidden");
     ready.classList.remove("hidden");
     currentMcpUrl = actual.mcpUrl || undefined;
@@ -355,6 +358,7 @@ $("save-start").addEventListener("click", async () => {
     await invoke("take_over_daemon");
     runtimeStartFailed = false;
     runtimeHealthRecorded = false;
+    runtimeAutoStartAttempted = true;
     await invoke("start_daemon");
     configuring = false;
     await refresh();
@@ -427,6 +431,7 @@ $("restart-daemon").addEventListener("click", async () => {
     await invoke("take_over_daemon");
     runtimeStartFailed = false;
     runtimeHealthRecorded = false;
+    runtimeAutoStartAttempted = true;
     await invoke("start_daemon");
     await refresh();
     $("message").textContent = "搭手已经重新准备好。";
