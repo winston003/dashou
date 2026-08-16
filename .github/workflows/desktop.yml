@@ -201,7 +201,8 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix desktop
       - name: Prepare Tauri resource directories
-        run: node -e "for (const path of ['desktop/vendor/node-runtime', 'desktop/vendor/dashou-runtime', 'desktop/vendor/cloudflared']) require('node:fs').mkdirSync(path, { recursive: true })"
+        run: |
+          node -e "for (const path of ['desktop/vendor/node-runtime', 'desktop/vendor/dashou-runtime', 'desktop/vendor/cloudflared']) require('node:fs').mkdirSync(path, { recursive: true })"
       - name: Compile and test Windows-specific desktop code
         run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
       - name: Configure release keys
