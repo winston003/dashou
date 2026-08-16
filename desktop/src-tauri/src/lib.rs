@@ -15,6 +15,16 @@ use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
 
 struct DaemonState(Mutex<Option<Child>>);
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(windows)]
+fn hide_windows_console(command: &mut Command) -> &mut Command {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
 const CONTROL_BASE_URL: &str = "https://dashou-pilot-control.whilewon.workers.dev";
 const LEGACY_PILOT_POLICY_URL: &str =
     "https://dashou-pilot-control.whilewon.workers.dev/pilot-policy";
@@ -145,6 +155,8 @@ struct ApiError {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiagnosticEvent {
+    #[serde(default)]
+    event_id: String,
     unix_seconds: u64,
     stage: String,
     outcome: String,
@@ -201,6 +213,7 @@ fn record_client_event(
     append_diagnostic_event(
         &data_dir,
         DiagnosticEvent {
+            event_id: format!("evt_{}", generate_token()),
             unix_seconds: unix_seconds(),
             stage,
             outcome,
@@ -303,6 +316,7 @@ async fn apply_for_access(app: AppHandle) -> Result<AccessStatus, String> {
     .await?;
     application.application_id = Some(response.application_id.clone());
     write_json_atomic(&application_path, &application, true)?;
+    let _ = sync_diagnostic_events(&data_dir, &application).await;
     Ok(access_status(response))
 }
 
@@ -338,6 +352,7 @@ async fn application_status(app: AppHandle) -> Result<AccessStatus, String> {
         None,
     )
     .await?;
+    let _ = sync_diagnostic_events(&data_dir, &application).await;
     if response.status == "approved" {
         let activation: ActivationResponse = control_request(
             reqwest::Method::POST,
@@ -598,7 +613,10 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
         .stdout(Stdio::from(log_file_for_stdout))
         .stderr(Stdio::from(log_file));
     #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(&mut command, 0x08000000 | 0x00000200);
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW | 0x00000200);
+    }
     #[cfg(unix)]
     unsafe {
         // Keep the Node service and the cloudflared child in one process
@@ -709,7 +727,9 @@ fn stop_child(state: &State<'_, DaemonState>) -> Result<(), String> {
         {
             // Child::kill() does not include descendants on Windows. taskkill
             // tree mode is the smallest reliable equivalent for this bundle.
-            let _ = Command::new("taskkill")
+            let mut taskkill = Command::new("taskkill");
+            hide_windows_console(&mut taskkill);
+            let _ = taskkill
                 .args(["/PID", &pid.to_string(), "/T", "/F"])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -776,14 +796,25 @@ fn process_is_alive(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        return Command::new("tasklist")
+        let mut tasklist = Command::new("tasklist");
+        hide_windows_console(&mut tasklist);
+        return tasklist
             .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
-            .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
+            .output()
+            .map(|output| output.status.success() && tasklist_contains_pid(&output.stdout, pid))
             .unwrap_or(false);
     }
+}
+
+#[cfg(any(windows, test))]
+fn tasklist_contains_pid(output: &[u8], pid: u32) -> bool {
+    let expected = pid.to_string();
+    String::from_utf8_lossy(output).lines().any(|line| {
+        let mut fields = line.trim().trim_matches('"').split("\",\"");
+        let _image_name = fields.next();
+        fields.next() == Some(expected.as_str())
+    })
 }
 
 fn process_command(pid: u32) -> Option<String> {
@@ -804,7 +835,9 @@ fn process_command(pid: u32) -> Option<String> {
         let script = format!(
             "Get-CimInstance Win32_Process -Filter \"ProcessId = {pid}\" | ForEach-Object {{ $_.CommandLine }}"
         );
-        let output = Command::new("powershell.exe")
+        let mut powershell = Command::new("powershell.exe");
+        hide_windows_console(&mut powershell);
+        let output = powershell
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .output()
             .ok()?;
@@ -843,7 +876,9 @@ fn terminate_external_daemon(pid: u32) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        let status = Command::new("taskkill")
+        let mut taskkill = Command::new("taskkill");
+        hide_windows_console(&mut taskkill);
+        let status = taskkill
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -961,7 +996,9 @@ fn detect_system_proxy() -> ProxySettings {
     }
     #[cfg(windows)]
     {
-        if let Ok(output) = Command::new("reg")
+        let mut reg = Command::new("reg");
+        hide_windows_console(&mut reg);
+        if let Ok(output) = reg
             .args([
                 "query",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
@@ -1321,6 +1358,47 @@ fn build_diagnostic_report(data_dir: &Path) -> DiagnosticReport {
     }
 }
 
+async fn sync_diagnostic_events(data_dir: &Path, application: &StoredApplication) -> Result<(), String> {
+    let Some(application_id) = application.application_id.as_deref() else {
+        return Ok(());
+    };
+    let path = data_dir.join("logs").join("desktop-events.jsonl");
+    let mut events = fs::read_to_string(path)
+        .ok()
+        .map(|text| {
+            text.lines()
+                .filter_map(|line| serde_json::from_str::<DiagnosticEvent>(line).ok())
+                .filter(|event| !event.event_id.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if events.is_empty() {
+        return Ok(());
+    }
+    if events.len() > 50 {
+        events.drain(..events.len() - 50);
+    }
+    let base_url = normalize_control_base_url(&application.control_base_url)?;
+    let body = serde_json::json!({
+        "events": events.into_iter().map(|event| serde_json::json!({
+            "eventId": event.event_id,
+            "stage": event.stage,
+            "outcome": event.outcome,
+            "errorCode": event.error_code,
+            "appVersion": event.app_version,
+            "unixSeconds": event.unix_seconds,
+        })).collect::<Vec<_>>(),
+    });
+    let _: serde_json::Value = control_request(
+        reqwest::Method::POST,
+        &format!("{base_url}/applications/{application_id}/events"),
+        Some(&application.application_token),
+        Some(body),
+    )
+    .await?;
+    Ok(())
+}
+
 fn unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1631,7 +1709,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.3-rc.2".into(),
+            version: "0.1.3-rc.3".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -1649,10 +1727,11 @@ mod tests {
         append_diagnostic_event(
             &root,
             DiagnosticEvent {
+                event_id: "evt_abcdefghijklmnop".into(),
                 unix_seconds: 1_786_838_400,
                 stage: "application_submit_failed".into(),
                 outcome: "error".into(),
-                app_version: "0.1.3-rc.2".into(),
+                app_version: "0.1.3-rc.3".into(),
                 error_code: Some("CONTROL_CONNECT".into()),
                 application_id: None,
             },
@@ -1775,6 +1854,14 @@ mod tests {
         assert!(!is_dashou_serve_command(
             "/usr/bin/python /tmp/dashou-cli.js serve"
         ));
+    }
+
+    #[test]
+    fn tasklist_pid_parser_does_not_treat_empty_results_as_live_processes() {
+        let matching = br#""node.exe","4242","Console","1","42,000 K""#;
+        assert!(tasklist_contains_pid(matching, 4242));
+        assert!(!tasklist_contains_pid(matching, 4243));
+        assert!(!tasklist_contains_pid(b"INFO: No tasks are running which match the specified criteria.", 4242));
     }
 
     #[cfg(windows)]

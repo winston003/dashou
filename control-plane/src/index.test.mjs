@@ -234,6 +234,52 @@ test("admin can inspect a safe application timeline but unauthenticated callers 
   assert.equal(JSON.stringify(payload).includes(applicationToken), false);
 });
 
+test("client progress signals are authenticated, deduplicated and visible to the admin", async () => {
+  const db = new FakeD1();
+  const env = { DB: db, PILOT_ADMIN_TOKEN: ADMIN_TOKEN };
+  const applicationToken = "S".repeat(43);
+  const create = await request("POST", "/applications", {
+    env,
+    body: {
+      applicationToken,
+      deviceId: `dev_${"s".repeat(24)}`,
+      deviceName: "Signal PC",
+      platform: "windows-x64",
+    },
+  });
+  const created = await create.json();
+  const events = [{
+    eventId: "evt_abcdefghijklmnop",
+    stage: "app_opened",
+    outcome: "ok",
+    appVersion: "0.1.3-rc.3",
+    unixSeconds: 1_786_838_400,
+  }, {
+    eventId: "evt_qrstuvwxyz12345",
+    stage: "application_submitted",
+    outcome: "ok",
+    appVersion: "0.1.3-rc.3",
+    unixSeconds: 1_786_838_401,
+  }];
+  assert.equal((await request("POST", `/applications/${created.applicationId}/events`, { env, body: { events } })).status, 401);
+  const accepted = await request("POST", `/applications/${created.applicationId}/events`, {
+    env,
+    token: applicationToken,
+    body: { events },
+  });
+  assert.deepEqual(await accepted.json(), { accepted: 2 });
+  await request("POST", `/applications/${created.applicationId}/events`, {
+    env,
+    token: applicationToken,
+    body: { events },
+  });
+  const detail = await request("GET", `/admin/applications/${created.applicationId}`, { env, token: ADMIN_TOKEN });
+  const payload = await detail.json();
+  assert.equal(payload.events.length, 2);
+  assert.equal(payload.events[0].stage, "app_opened");
+  assert.equal(JSON.stringify(payload).includes(applicationToken), false);
+});
+
 test("failed device provisioning returns the application to pending for a safe retry", async () => {
   const db = new FakeD1();
   const env = {
@@ -324,7 +370,7 @@ test("Worker health exposes the deployment build SHA", async () => {
   assert.deepEqual(await response.json(), {
     ok: true,
     name: "dashou-pilot-control",
-    version: "0.1.3-rc.2",
+    version: "0.1.3-rc.3",
     buildSha: "abc123",
   });
 });
@@ -385,6 +431,7 @@ class FakeD1 {
   rows = new Map();
   applications = new Map();
   rateLimits = new Map();
+  events = new Map();
 
   prepare(sql) {
     return new FakeStatement(this, sql);
@@ -394,6 +441,7 @@ class FakeD1 {
     const snapshotRows = structuredClone(this.rows);
     const snapshotApplications = structuredClone(this.applications);
     const snapshotRateLimits = structuredClone(this.rateLimits);
+    const snapshotEvents = structuredClone(this.events);
     try {
       const results = [];
       for (const statement of statements) results.push(await statement.run());
@@ -402,6 +450,7 @@ class FakeD1 {
       this.rows = snapshotRows;
       this.applications = snapshotApplications;
       this.rateLimits = snapshotRateLimits;
+      this.events = snapshotEvents;
       throw error;
     }
   }
@@ -444,6 +493,10 @@ class FakeStatement {
   }
 
   async all() {
+    if (this.sql.includes("FROM pilot_client_events")) {
+      const rows = [...this.db.events.values()].filter((row) => row.application_id === this.values[0]);
+      return { results: rows.sort((left, right) => left.received_at.localeCompare(right.received_at) || left.client_unix_seconds - right.client_unix_seconds) };
+    }
     if (this.sql.includes("FROM pilot_applications")) {
       const rows = [...this.db.applications.values()];
       return { results: this.sql.includes("WHERE status = ?1") ? rows.filter((row) => row.status === this.values[0]) : rows };
@@ -452,6 +505,11 @@ class FakeStatement {
   }
 
   async run() {
+    if (this.sql === "DELETE FROM pilot_client_events") {
+      const changes = this.db.events.size;
+      this.db.events.clear();
+      return result(changes);
+    }
     if (this.sql === "DELETE FROM pilot_application_rate_limits") {
       const changes = this.db.rateLimits.size;
       this.db.rateLimits.clear();
@@ -470,6 +528,22 @@ class FakeStatement {
     if (this.sql.startsWith("INSERT INTO pilot_application_rate_limits")) {
       const key = `${this.values[0]}.${this.values[1]}`;
       this.db.rateLimits.set(key, (this.db.rateLimits.get(key) ?? 0) + 1);
+      return result(1);
+    }
+    if (this.sql.startsWith("INSERT OR IGNORE INTO pilot_client_events")) {
+      const [applicationId, eventId, stage, outcome, errorCode, appVersion, clientUnixSeconds, receivedAt] = this.values;
+      const key = `${applicationId}.${eventId}`;
+      if (this.db.events.has(key)) return result(0);
+      this.db.events.set(key, {
+        application_id: applicationId,
+        event_id: eventId,
+        stage,
+        outcome,
+        error_code: errorCode,
+        app_version: appVersion,
+        client_unix_seconds: clientUnixSeconds,
+        received_at: receivedAt,
+      });
       return result(1);
     }
     if (this.sql.startsWith("INSERT INTO pilot_applications")) {

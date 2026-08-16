@@ -1,6 +1,6 @@
 {
   "name": "@warmbyte/dashou",
-  "version": "0.1.3-rc.2",
+  "version": "0.1.3-rc.3",
   "description": "让 ChatGPT 安全地读取、修改并执行你授权的本地项目。",
   "type": "module",
   "main": "dist/dashou-server.js",
@@ -44,6 +44,7 @@
     "desktop:build": "npm run tauri:build --prefix desktop",
     "pilot:admin": "node scripts/pilot-admin.mjs",
     "pilot:admin:setup": "node scripts/setup-pilot-admin.mjs",
+    "pilot:control:setup": "node scripts/setup-pilot-control.mjs",
     "pilot:invite": "node scripts/create-pilot-invite.mjs",
     "deploy:control-plane": "node scripts/deploy-control-plane.mjs",
     "verify:control-plane": "node --check control-plane/src/index.js && node --check control-plane/src/cloudflare.js && node --test control-plane/src/*.test.mjs scripts/pilot-admin.test.mjs scripts/pilot-admin-config.test.mjs && npx wrangler deploy --config control-plane/wrangler.jsonc --dry-run",

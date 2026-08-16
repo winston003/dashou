@@ -48,6 +48,37 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: npm ci --prefix desktop
+      - name: Require Apple Developer ID and notarization credentials
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            test -n "${!name:-}" || { echo "Missing required GitHub secret: $name" >&2; exit 1; }
+          done
+      - name: Import Apple Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          certificate="$RUNNER_TEMP/dashou-developer-id.p12"
+          keychain="$RUNNER_TEMP/dashou-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          test -n "$identity" || { echo "Developer ID Application identity not found" >&2; exit 1; }
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
       - name: Configure release keys
         env:
           DASHOU_UPDATER_PUBLIC_KEY: ${{ secrets.DASHOU_UPDATER_PUBLIC_KEY }}
@@ -63,9 +94,20 @@ jobs:
           DASHOU_CLOUDFLARED_SHA256: ae6ee90188ae5833c687ce937c3693e28403677607c06c65a2ff2b6a022f50e4
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri:build --prefix desktop -- --bundles app,dmg
-      - name: Verify macOS bundle signature
-        run: codesign --verify --deep --strict desktop/src-tauri/target/release/bundle/macos/Dashou.app
+      - name: Verify Developer ID signature, notarization and stapling
+        run: |
+          set -euo pipefail
+          app="desktop/src-tauri/target/release/bundle/macos/Dashou.app"
+          dmg="$(find desktop/src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -print -quit)"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 | grep -F "Authority=Developer ID Application:"
+          spctl --assess --type execute --verbose=4 "$app"
+          xcrun stapler validate "$app"
+          xcrun stapler validate "$dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: dashou-macos-arm64
@@ -82,6 +124,37 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: npm ci --prefix desktop
+      - name: Require Apple Developer ID and notarization credentials
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            test -n "${!name:-}" || { echo "Missing required GitHub secret: $name" >&2; exit 1; }
+          done
+      - name: Import Apple Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          certificate="$RUNNER_TEMP/dashou-developer-id.p12"
+          keychain="$RUNNER_TEMP/dashou-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          test -n "$identity" || { echo "Developer ID Application identity not found" >&2; exit 1; }
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
       - name: Configure release keys
         env:
           DASHOU_UPDATER_PUBLIC_KEY: ${{ secrets.DASHOU_UPDATER_PUBLIC_KEY }}
@@ -97,9 +170,20 @@ jobs:
           DASHOU_CLOUDFLARED_SHA256: 3f74d697045ecf56dd2fbeb42f59767ecdf4067c409d55f080563923e8a1bb32
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri:build --prefix desktop -- --bundles app,dmg
-      - name: Verify macOS bundle signature
-        run: codesign --verify --deep --strict desktop/src-tauri/target/release/bundle/macos/Dashou.app
+      - name: Verify Developer ID signature, notarization and stapling
+        run: |
+          set -euo pipefail
+          app="desktop/src-tauri/target/release/bundle/macos/Dashou.app"
+          dmg="$(find desktop/src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -print -quit)"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 | grep -F "Authority=Developer ID Application:"
+          spctl --assess --type execute --verbose=4 "$app"
+          xcrun stapler validate "$app"
+          xcrun stapler validate "$dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: dashou-macos-x64
@@ -116,6 +200,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: npm ci --prefix desktop
+      - name: Compile and test Windows-specific desktop code
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
       - name: Configure release keys
         env:
           DASHOU_UPDATER_PUBLIC_KEY: ${{ secrets.DASHOU_UPDATER_PUBLIC_KEY }}

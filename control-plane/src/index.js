@@ -6,9 +6,24 @@ const APPLICATION_ID_PATTERN = /^req_[A-Za-z0-9_-]{16,64}$/;
 const DEVICE_ID_PATTERN = /^dev_[A-Za-z0-9_-]{16,96}$/;
 const APPLICATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/;
 const PERIODS = new Set(["week", "month", "quarter", "year"]);
-const CONTROL_PLANE_VERSION = "0.1.3-rc.2";
+const CONTROL_PLANE_VERSION = "0.1.3-rc.3";
 const DEFAULT_LEASE_TTL_SECONDS = 15 * 60;
 const RESET_CONFIRMATION = "DELETE_ALL_DASHOU_PILOT_DATA";
+const CLIENT_EVENT_ID_PATTERN = /^evt_[A-Za-z0-9_-]{12,96}$/;
+const CLIENT_EVENT_STAGES = new Set([
+  "app_opened",
+  "application_submit_started",
+  "application_submitted",
+  "application_submit_failed",
+  "application_status_failed",
+  "activation_completed",
+  "folders_selected",
+  "runtime_start_started",
+  "runtime_started",
+  "runtime_start_failed",
+  "chatgpt_opened",
+  "connection_password_copied",
+]);
 
 export default {
   async fetch(request, env) {
@@ -49,6 +64,10 @@ async function routeRequest(request, env) {
   const applicationMatch = /^\/applications\/([^/]+)$/.exec(url.pathname);
   if (applicationMatch && request.method === "GET") {
     return applicationStatus(request, env, decodeURIComponent(applicationMatch[1]));
+  }
+  const applicationEventsMatch = /^\/applications\/([^/]+)\/events$/.exec(url.pathname);
+  if (applicationEventsMatch && request.method === "POST") {
+    return recordApplicationEvents(request, env, decodeURIComponent(applicationEventsMatch[1]));
   }
 
   if (url.pathname === "/admin/applications" && request.method === "GET") return adminApplicationList(request, env, url);
@@ -126,6 +145,37 @@ async function applicationStatus(request, env, applicationId) {
   return json(applicationStatusSummary(row));
 }
 
+async function recordApplicationEvents(request, env, applicationId) {
+  await authorizedApplication(request, env, applicationId);
+  const body = await jsonObject(request);
+  if (!Array.isArray(body.events) || body.events.length < 1 || body.events.length > 50) {
+    throw new HttpError(400, "events must contain between 1 and 50 items");
+  }
+  const receivedAt = new Date().toISOString();
+  const statements = body.events.map((event) => {
+    if (!event || typeof event !== "object" || Array.isArray(event)) throw new HttpError(400, "event must be an object");
+    const eventId = requiredString(event.eventId, "eventId");
+    if (!CLIENT_EVENT_ID_PATTERN.test(eventId)) throw new HttpError(400, "eventId is invalid");
+    const stage = requiredString(event.stage, "stage");
+    if (!CLIENT_EVENT_STAGES.has(stage)) throw new HttpError(400, "event stage is invalid");
+    const outcome = requiredString(event.outcome, "outcome");
+    if (!["ok", "error"].includes(outcome)) throw new HttpError(400, "event outcome is invalid");
+    const errorCode = event.errorCode == null ? null : limitedString(event.errorCode, "errorCode", 48);
+    if (errorCode && !/^[A-Z0-9_]{3,48}$/.test(errorCode)) throw new HttpError(400, "event errorCode is invalid");
+    const appVersion = limitedString(event.appVersion, "appVersion", 40);
+    const clientUnixSeconds = Number(event.unixSeconds);
+    if (!Number.isSafeInteger(clientUnixSeconds) || clientUnixSeconds < 1_600_000_000 || clientUnixSeconds > 4_102_444_800) {
+      throw new HttpError(400, "event unixSeconds is invalid");
+    }
+    return env.DB.prepare(
+      "INSERT OR IGNORE INTO pilot_client_events (application_id, event_id, stage, outcome, error_code, app_version, client_unix_seconds, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    ).bind(applicationId, eventId, stage, outcome, errorCode, appVersion, clientUnixSeconds, receivedAt);
+  });
+  if (typeof env.DB.batch !== "function") throw new Error("D1 batch support is required");
+  await env.DB.batch(statements);
+  return json({ accepted: statements.length });
+}
+
 async function activateApplication(request, env, applicationId) {
   const row = await authorizedApplication(request, env, applicationId);
   if (row.status === "activated") throw new HttpError(410, "Activation has already been completed");
@@ -176,7 +226,21 @@ async function adminApplicationDetail(request, env, applicationId) {
   validateApplicationId(applicationId);
   const row = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
   if (!row) throw new HttpError(404, `Application not found: ${applicationId}`);
-  return json({ application: adminApplicationSummary(row) });
+  const eventResult = await env.DB.prepare(
+    "SELECT event_id, stage, outcome, error_code, app_version, client_unix_seconds, received_at FROM pilot_client_events WHERE application_id = ?1 ORDER BY received_at, client_unix_seconds",
+  ).bind(applicationId).all();
+  return json({
+    application: adminApplicationSummary(row),
+    events: (eventResult.results ?? []).map((event) => ({
+      eventId: event.event_id,
+      stage: event.stage,
+      outcome: event.outcome,
+      ...(event.error_code ? { errorCode: event.error_code } : {}),
+      appVersion: event.app_version,
+      unixSeconds: event.client_unix_seconds,
+      receivedAt: event.received_at,
+    })),
+  });
 }
 
 async function adminReset(request, env) {
@@ -199,6 +263,7 @@ async function adminReset(request, env) {
   }
   if (typeof env.DB.batch !== "function") throw new Error("D1 batch support is required");
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM pilot_client_events"),
     env.DB.prepare("DELETE FROM pilot_application_rate_limits"),
     env.DB.prepare("DELETE FROM pilot_applications"),
     env.DB.prepare("DELETE FROM pilot_accounts"),

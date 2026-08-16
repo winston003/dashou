@@ -24,7 +24,7 @@ if (scope === "applications") {
   } else if (action === "inspect") {
     const applicationId = requiredArgument(subject, "applicationId");
     const payload = await call("GET", `/admin/applications/${encodeURIComponent(applicationId)}`);
-    printApplicationTimeline(payload.application);
+    printApplicationTimeline(payload.application, payload.events ?? []);
   } else if (action === "approve") {
     const applicationId = requiredArgument(subject, "applicationId");
     const period = option("--period") || "month";
@@ -143,7 +143,7 @@ function printApplications(applications, status) {
   }
 }
 
-function printApplicationTimeline(application) {
+function printApplicationTimeline(application, events) {
   console.log(`申请 ${application.applicationId}`);
   console.log(`${application.deviceName} · ${application.platform} · 当前：${statusLabel(application.status)}`);
   const timeline = [
@@ -159,6 +159,32 @@ function printApplicationTimeline(application) {
   for (const [at, label] of timeline) console.log(`  ${formatDate(at)}  ${label}`);
   if (application.expiresAt) console.log(`  ${formatDate(application.expiresAt)}  授权到期`);
   if (application.reason) console.log(`原因：${application.reason}`);
+  if (events.length > 0) {
+    console.log("客户端信号：");
+    for (const event of events) {
+      const at = Number.isSafeInteger(event.unixSeconds)
+        ? new Date(event.unixSeconds * 1_000).toISOString()
+        : event.receivedAt;
+      console.log(`  ${formatDate(at)}  ${eventLabel(event.stage)}${event.outcome === "error" ? `（失败${event.errorCode ? `：${event.errorCode}` : ""}）` : ""} · v${event.appVersion}`);
+    }
+  }
+}
+
+function eventLabel(stage) {
+  return ({
+    app_opened: "打开客户端",
+    application_submit_started: "点击申请",
+    application_submitted: "申请发送成功",
+    application_submit_failed: "申请发送失败",
+    application_status_failed: "状态查询失败",
+    activation_completed: "领取配置完成",
+    folders_selected: "已选择文件夹",
+    runtime_start_started: "开始启动服务",
+    runtime_started: "本地服务可用",
+    runtime_start_failed: "本地服务启动失败",
+    chatgpt_opened: "前往 ChatGPT",
+    connection_password_copied: "复制授权密码",
+  })[stage] || stage;
 }
 
 function statusLabel(status) {

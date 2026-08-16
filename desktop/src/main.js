@@ -12,6 +12,8 @@ const ready = $("ready");
 const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CHATGPT_APPS_URL = "https://chatgpt.com/plugins?view=personal";
 let updatePromise;
+let availableUpdate;
+let updateReadyToRestart = false;
 let refreshPromise;
 let currentMcpUrl;
 let configuring = false;
@@ -24,6 +26,8 @@ let savedRootsBeforeEditing = [];
 let hasSavedConfiguration = false;
 let applicationStatusFailureRecorded = false;
 let activationRecorded = false;
+let runtimeStartFailed = false;
+let runtimeHealthRecorded = false;
 
 function errorText(error) {
   if (typeof error === "string") return error;
@@ -211,7 +215,7 @@ async function loadSetupState() {
   renderSetupState();
 }
 
-async function checkAndInstallUpdate({ silent = false } = {}) {
+async function checkForUpdate({ silent = false } = {}) {
   if (updatePromise) return updatePromise;
   updatePromise = (async () => {
     try {
@@ -220,9 +224,9 @@ async function checkAndInstallUpdate({ silent = false } = {}) {
         if (!silent) $("message").textContent = "当前已经是最新版本。";
         return false;
       }
-      $("message").textContent = `发现 ${update.version}，正在自动更新…`;
-      await update.downloadAndInstall();
-      await relaunch();
+      availableUpdate = update;
+      $("check-update").textContent = "安装更新";
+      $("message").textContent = `发现新版本 ${update.version}。准备好后点击“安装更新”，不会打断当前操作。`;
       return true;
     } catch (error) {
       if (!silent) $("message").textContent = "更新没有完成，请稍后再试。";
@@ -232,6 +236,33 @@ async function checkAndInstallUpdate({ silent = false } = {}) {
     }
   })();
   return updatePromise;
+}
+
+async function installAvailableUpdate() {
+  if (updateReadyToRestart) {
+    await relaunch();
+    return;
+  }
+  if (!availableUpdate) {
+    const found = await checkForUpdate();
+    if (!found) return;
+  }
+  if (configuring || applying || restarting) {
+    $("message").textContent = "当前操作完成后再安装更新。";
+    return;
+  }
+  $("check-update").disabled = true;
+  $("message").textContent = `正在准备 ${availableUpdate.version}…`;
+  try {
+    await availableUpdate.downloadAndInstall();
+    updateReadyToRestart = true;
+    $("check-update").textContent = "重新启动完成更新";
+    $("message").textContent = "更新已准备好。完成当前工作后，点击按钮重新启动。";
+  } catch {
+    $("message").textContent = "更新没有完成，请稍后再试。";
+  } finally {
+    $("check-update").disabled = false;
+  }
 }
 
 async function refresh() {
@@ -260,10 +291,11 @@ async function refresh() {
       await loadSetupState();
       return;
     }
-    if (!current.running) {
+    if (!current.running && !runtimeStartFailed) {
       try {
         await invoke("start_daemon");
       } catch (error) {
+        runtimeStartFailed = true;
         showReadyFailure(error);
         return;
       }
@@ -274,21 +306,27 @@ async function refresh() {
     currentMcpUrl = actual.mcpUrl || undefined;
     const readyForChatGPT = actual.running && actual.localHealth && actual.publicHealth;
     const localOnly = actual.running && actual.localHealth;
+    if (actual.localHealth && !runtimeHealthRecorded) {
+      runtimeHealthRecorded = true;
+      void recordEvent("runtime_started", "ok", null, accessState.applicationId);
+    }
     $("connect-chatgpt").disabled = !readyForChatGPT;
-    $("restart-daemon").classList.toggle("hidden", actual.localHealth);
+    $("restart-daemon").classList.toggle("hidden", actual.running || actual.localHealth);
     $("status-text").textContent = readyForChatGPT
       ? "可以连接 ChatGPT"
       : localOnly
         ? "正在建立连接"
         : actual.running
-          ? "搭手需要恢复"
+          ? "搭手正在启动"
           : "搭手尚未准备好";
     $("ready-copy").textContent = readyForChatGPT
       ? "搭手已准备好。下方按钮会复制连接地址，并直接打开 ChatGPT 的添加页面。"
       : localOnly
         ? "搭手已经启动，正在完成最后的连接。"
-        : "搭手没有正常启动，请点击“重新启动”再试。";
-    $("status-dot").className = "dot " + (readyForChatGPT ? "ok" : localOnly ? "warn" : "bad");
+        : actual.running
+          ? "搭手正在启动，通常只需要几秒钟。"
+          : "搭手没有正常启动，请点击“重新启动”再试。";
+    $("status-dot").className = "dot " + (readyForChatGPT ? "ok" : actual.running ? "warn" : "bad");
   })();
   try {
     return await refreshPromise;
@@ -315,8 +353,9 @@ $("save-start").addEventListener("click", async () => {
     saved = true;
     hasSavedConfiguration = true;
     await invoke("take_over_daemon");
+    runtimeStartFailed = false;
+    runtimeHealthRecorded = false;
     await invoke("start_daemon");
-    void recordEvent("runtime_started");
     configuring = false;
     await refresh();
   } catch (error) {
@@ -386,6 +425,8 @@ $("restart-daemon").addEventListener("click", async () => {
   $("message").textContent = "正在恢复搭手…";
   try {
     await invoke("take_over_daemon");
+    runtimeStartFailed = false;
+    runtimeHealthRecorded = false;
     await invoke("start_daemon");
     await refresh();
     $("message").textContent = "搭手已经重新准备好。";
@@ -473,8 +514,8 @@ $("copy-diagnostics").addEventListener("click", async () => {
 });
 
 $("check-update").addEventListener("click", async () => {
-  $("message").textContent = "正在检查更新…";
-  await checkAndInstallUpdate();
+  if (!availableUpdate && !updateReadyToRestart) $("message").textContent = "正在检查更新…";
+  await installAvailableUpdate();
 });
 
 void recordEvent("app_opened");
@@ -484,11 +525,10 @@ refresh().catch((error) => {
   setup.classList.remove("hidden");
 });
 
-// Keep the installed app current without requiring the user to remember a
-// manual upgrade step. Background failures stay silent and are retried later;
-// the explicit button remains available for diagnostics.
-void checkAndInstallUpdate({ silent: true });
-setInterval(() => { void checkAndInstallUpdate({ silent: true }); }, UPDATE_INTERVAL_MS);
+// Discover updates in the background, but never install or restart while the
+// user is applying, choosing folders or starting the local service.
+void checkForUpdate({ silent: true });
+setInterval(() => { void checkForUpdate({ silent: true }); }, UPDATE_INTERVAL_MS);
 setInterval(() => { void refresh().catch((error) => {
   $("connect-chatgpt").disabled = true;
   $("status-dot").className = "dot bad";
