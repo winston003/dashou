@@ -13,6 +13,8 @@ use tauri::menu::{Menu, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
 
+mod ui_update;
+
 struct DaemonState(Mutex<Option<Child>>);
 
 #[cfg(windows)]
@@ -1358,7 +1360,10 @@ fn build_diagnostic_report(data_dir: &Path) -> DiagnosticReport {
     }
 }
 
-async fn sync_diagnostic_events(data_dir: &Path, application: &StoredApplication) -> Result<(), String> {
+async fn sync_diagnostic_events(
+    data_dir: &Path,
+    application: &StoredApplication,
+) -> Result<(), String> {
     let Some(application_id) = application.application_id.as_deref() else {
         return Ok(());
     };
@@ -1600,6 +1605,10 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
+        .register_uri_scheme_protocol("dashou-ui", |context, request| {
+            ui_update::protocol_response(context.app_handle(), request)
+        })
         .manage(DaemonState(Mutex::new(None)))
         .setup(|app| {
             let show_item = MenuItemBuilder::with_id("show", "显示搭手").build(app)?;
@@ -1623,6 +1632,11 @@ pub fn run() {
                 tray = tray.icon(icon).icon_as_template(true);
             }
             tray.build(app)?;
+            if !cfg!(debug_assertions) {
+                if let Ok(Some(version)) = ui_update::recover_interrupted_update(app.handle()) {
+                    let _ = ui_update::navigate_to_active(app.handle(), &version);
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1637,7 +1651,12 @@ pub fn run() {
             configure,
             start_daemon,
             stop_daemon,
-            take_over_daemon
+            take_over_daemon,
+            ui_update::ui_bundle_status,
+            ui_update::ui_ready,
+            ui_update::check_ui_update,
+            ui_update::copy_bundle,
+            ui_update::check_copy_update
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -1861,7 +1880,10 @@ mod tests {
         let matching = br#""node.exe","4242","Console","1","42,000 K""#;
         assert!(tasklist_contains_pid(matching, 4242));
         assert!(!tasklist_contains_pid(matching, 4243));
-        assert!(!tasklist_contains_pid(b"INFO: No tasks are running which match the specified criteria.", 4242));
+        assert!(!tasklist_contains_pid(
+            b"INFO: No tasks are running which match the specified criteria.",
+            4242
+        ));
     }
 
     #[cfg(windows)]

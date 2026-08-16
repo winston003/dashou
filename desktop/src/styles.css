@@ -31,6 +31,17 @@ button.secondary { display: block; margin-top: 10px; width: 100%; }
 .access-feedback p { margin: 0; }
 .access-feedback button.compact { display: inline-block; width: auto; margin: 9px 8px 0 0; padding: 7px 10px; }
 .access-feedback span { color: #6d5c4b; }
+.access-progress { grid-column: 2 / 4; padding: 12px 13px; border: 1px solid #ead9c3; border-radius: 12px; background: #fffaf3; color: #6d5c4b; font-size: 12px; line-height: 1.5; }
+.access-progress ol { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.access-progress li::before { display: inline-block; width: 19px; color: #b7aa9a; content: "○"; }
+.access-progress li.done::before { color: #5d9a69; content: "✓"; }
+.access-progress li.active { color: #76502f; font-weight: 700; }
+.access-progress li.active::before { color: #b8753f; content: "●"; }
+.access-progress p { margin: 10px 0 0; color: #81776c; }
+.inline-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.inline-actions button { margin-top: 10px; padding: 7px 10px; }
+.trust-note { margin-top: 18px; padding: 14px 15px; border-radius: 12px; background: #f5eee5; color: #51483f; font-size: 12px; line-height: 1.55; }
+.trust-note p { margin: 5px 0 0; color: #786e64; }
 .roots-picker { display: grid; gap: 8px; }
 .roots-list { display: grid; gap: 7px; }
 .roots-empty { margin: 0; padding: 11px 12px; border: 1px dashed #d8cec0; border-radius: 9px; color: #948b81; font-size: 12px; }
@@ -55,7 +66,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .more-actions { margin-top: 18px; color: #6d5c4b; font-size: 13px; }
 .more-actions summary { cursor: pointer; }
 .more-actions .actions { margin-top: -2px; }
-.hidden { display: none; }
+.hidden { display: none !important; }
 .muted { color: #948b81; font-weight: 400; }
 .error { min-height: 1.2em; color: #a43e32; }
 .message { min-height: 1.2em; color: #6d5c4b; }

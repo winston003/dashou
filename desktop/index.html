@@ -14,22 +14,37 @@
       </header>
 
       <section id="setup" class="card hidden">
-        <h2>开始使用</h2>
-        <p>先申请开通，再选择 ChatGPT 可以使用的文件夹。无需填写连接信息。</p>
+        <h2 id="setup-title" data-copy="setupTitle">让这台电脑用上搭手</h2>
+        <p id="setup-intro" data-copy="setupIntro">目前是小范围试用。我们会先确认当前名额；有名额后，搭手会自动为这台电脑做好准备。</p>
         <div class="setup-step">
           <span class="step-number">1</span>
           <div class="step-copy">
-            <strong>为这台电脑申请安全连接</strong>
-            <span id="access-status">尚未申请</span>
+            <strong data-copy="joinTrial">加入试用</strong>
+            <span id="access-status" data-copy="trialIdle">还没有加入</span>
           </div>
-          <button id="apply-access" class="primary" type="button">开始申请</button>
+          <button id="apply-access" class="primary" type="button">加入试用</button>
+          <div id="access-progress" class="access-progress hidden" aria-live="polite">
+            <ol>
+              <li class="done">已经收到</li>
+              <li id="progress-prepare">正在确认名额</li>
+              <li id="progress-check">准备连接</li>
+              <li id="progress-done">准备完成</li>
+            </ol>
+            <p id="access-wait-copy">通常几分钟内会有结果。你可以关闭窗口，下次打开时继续查看。</p>
+            <div class="inline-actions">
+              <button id="refresh-access" type="button">重新检查</button>
+              <button id="notify-ready" type="button">准备好后提醒我</button>
+            </div>
+          </div>
           <div id="access-feedback" class="access-feedback hidden" aria-live="assertive">
-            <p id="access-error"></p>
+            <strong data-copy="failureTitle">这次没有准备好</strong>
+            <p id="access-error" data-copy="failureBody"></p>
+            <button id="retry-access" class="secondary compact" type="button">重新准备</button>
             <button id="copy-diagnostics" class="secondary compact" type="button">复制排查信息</button>
             <span id="diagnostic-status"></span>
           </div>
         </div>
-        <div class="setup-step">
+        <div id="folder-step" class="setup-step hidden">
           <span class="step-number">2</span>
           <div class="step-copy">
             <strong>选择工作文件夹</strong>
@@ -48,6 +63,10 @@
           <button id="import-invite" type="button">选择邀请文件</button>
         </details>
         <p id="setup-error" class="error" aria-live="assertive"></p>
+        <aside class="trust-note">
+          <strong data-copy="trustTitle">你始终做主</strong>
+          <p data-copy="trustBody">文件读取和修改只发生在你选择的文件夹中。运行项目命令时，搭手会使用你当前电脑账户的权限。你可以随时添加或移除文件夹。</p>
+        </aside>
       </section>
 
       <section id="ready" class="card hidden">
@@ -70,7 +89,7 @@
         <p id="message" class="message"></p>
       </section>
 
-      <footer><span>只访问你选择的文件夹</span><span id="app-version"></span></footer>
+      <footer><span>你选择，搭手才使用</span><span id="app-version"></span></footer>
     </main>
     <script type="module" src="/src/main.js"></script>
   </body>

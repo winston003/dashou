@@ -1,0 +1,56 @@
+name: Dashou desktop content
+
+on:
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: Content to publish
+        required: true
+        type: choice
+        options: [both, ui, copy]
+        default: both
+      version:
+        description: Ordered content version, for example 2026.08.17.1
+        required: true
+        type: string
+      min_shell_version:
+        description: Oldest compatible Dashou shell
+        required: true
+        type: string
+        default: 0.1.3-rc.4
+
+permissions:
+  contents: read
+
+jobs:
+  package-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+      - run: npm ci --prefix desktop
+      - name: Build and sign content
+        env:
+          DASHOU_CONTENT_KIND: ${{ inputs.kind }}
+          DASHOU_CONTENT_VERSION: ${{ inputs.version }}
+          DASHOU_MIN_SHELL_VERSION: ${{ inputs.min_shell_version }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY_PASSWORD }}
+        run: npm run content:package --prefix desktop
+      - name: Publish replaceable signed content assets
+        env:
+          GH_TOKEN: ${{ secrets.DASHOU_RELEASES_TOKEN }}
+          GH_REPO: winston003/dashou-releases
+          DASHOU_CONTENT_KIND: ${{ inputs.kind }}
+        run: |
+          set -euo pipefail
+          if [[ "$DASHOU_CONTENT_KIND" == "ui" || "$DASHOU_CONTENT_KIND" == "both" ]]; then
+            gh release view ui-current >/dev/null 2>&1 || gh release create ui-current --title "Dashou current UI" --notes "Signed UI bundle pointer. Managed by CI." --latest=false
+            gh release upload ui-current desktop/release-content/dashou-ui-* desktop/release-content/ui-latest.json --clobber
+          fi
+          if [[ "$DASHOU_CONTENT_KIND" == "copy" || "$DASHOU_CONTENT_KIND" == "both" ]]; then
+            gh release view copy-current >/dev/null 2>&1 || gh release create copy-current --title "Dashou current copy" --notes "Signed copy bundle pointer. Managed by CI." --latest=false
+            gh release upload copy-current desktop/release-content/dashou-copy-* desktop/release-content/copy-latest.json --clobber
+          fi

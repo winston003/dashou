@@ -4,12 +4,14 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import "./styles.css";
 
 const $ = (id) => document.getElementById(id);
 const setup = $("setup");
 const ready = $("ready");
 const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const PENDING_SINCE_KEY = "dashou-pending-since";
 const CHATGPT_APPS_URL = "https://chatgpt.com/plugins?view=personal";
 let updatePromise;
 let availableUpdate;
@@ -29,6 +31,44 @@ let activationRecorded = false;
 let runtimeStartFailed = false;
 let runtimeHealthRecorded = false;
 let runtimeAutoStartAttempted = false;
+let copyMessages = {};
+let lastAccessStatus = "not_applied";
+let notifyWhenReady = localStorage.getItem("dashou-notify-ready") === "yes";
+
+function copy(key, fallback) {
+  return copyMessages[key] || fallback;
+}
+
+function applyCopyMessages(messages) {
+  copyMessages = messages && typeof messages === "object" ? messages : {};
+  for (const element of document.querySelectorAll("[data-copy]")) {
+    const value = copyMessages[element.dataset.copy];
+    if (typeof value === "string" && value.trim()) element.textContent = value;
+  }
+}
+
+async function loadCopy({ checkRemote = false } = {}) {
+  try {
+    const bundle = await invoke(checkRemote ? "check_copy_update" : "copy_bundle");
+    applyCopyMessages(bundle.messages);
+  } catch {
+    // The built-in wording is always available offline.
+  }
+}
+
+async function confirmUiReady() {
+  try {
+    const loadedFromDownloadedUi = location.protocol === "dashou-ui:"
+      || location.hostname === "dashou-ui.localhost";
+    if (!loadedFromDownloadedUi) return;
+    const bundle = await invoke("ui_bundle_status");
+    if (bundle.source === "downloaded" && bundle.version) {
+      await invoke("ui_ready", { version: bundle.version });
+    }
+  } catch {
+    // The shell will roll back this UI on the next launch if it cannot confirm readiness.
+  }
+}
 
 function errorText(error) {
   if (typeof error === "string") return error;
@@ -100,7 +140,7 @@ function showAccessError(error) {
     CONTROL_RESPONSE_INVALID: "搭手服务返回了异常结果，请稍后重试。",
   };
   $("access-error").textContent = messages[code]
-    || (code.startsWith("CONTROL_HTTP_") ? "申请没有被服务接受，请稍后重新尝试。" : "申请没有成功发送，请重新尝试。");
+    || copy("failureBody", code.startsWith("CONTROL_HTTP_") ? "我们暂时没能完成准备，请稍后再试一次。" : "可能是网络暂时不稳定。你可以重新试一次；如果仍然不行，把排查信息发给我们。");
   $("access-feedback").classList.remove("hidden");
 }
 
@@ -153,30 +193,63 @@ function renderSetupState() {
   const status = accessState?.status || "not_applied";
   const accessStatus = $("access-status");
   const applyButton = $("apply-access");
+  $("folder-step").classList.toggle("hidden", !accessReady);
+  $("setup-title").textContent = accessReady
+    ? copy("readyTitle", "搭手已经准备好了")
+    : copy("setupTitle", "让这台电脑用上搭手");
+  $("setup-intro").textContent = accessReady
+    ? copy("readyBody", "现在请选择你愿意让 ChatGPT 使用的文件夹。没有选择的文件夹不会出现在搭手中。")
+    : copy("setupIntro", "目前是小范围试用。我们会先确认当前名额；有名额后，搭手会自动为这台电脑做好准备。");
+  const progress = $("access-progress");
+  progress.classList.toggle("hidden", !["pending", "provisioning"].includes(status));
+  $("progress-prepare").className = status === "pending" ? "active" : "done";
+  $("progress-check").className = status === "provisioning" ? "active" : "";
+  $("progress-done").className = "";
+  $("notify-ready").textContent = notifyWhenReady ? "准备好后会提醒你" : "准备好后提醒我";
+  const isWaiting = ["pending", "provisioning"].includes(status);
+  const serverCreatedAt = Date.parse(accessState?.createdAt || accessState?.created_at || "");
+  let pendingSince = Number(localStorage.getItem(PENDING_SINCE_KEY));
+  if (isWaiting && Number.isFinite(serverCreatedAt)) {
+    pendingSince = serverCreatedAt;
+    localStorage.setItem(PENDING_SINCE_KEY, String(serverCreatedAt));
+  } else if (isWaiting && !Number.isFinite(pendingSince)) {
+    pendingSince = Date.now();
+    localStorage.setItem(PENDING_SINCE_KEY, String(pendingSince));
+  } else if (!isWaiting) {
+    localStorage.removeItem(PENDING_SINCE_KEY);
+  }
+  const waitingLong = isWaiting && Number.isFinite(pendingSince) && Date.now() - pendingSince > 5 * 60 * 1000;
+  $("access-wait-copy").textContent = notifyWhenReady
+    ? "你可以关闭窗口。准备好后，系统会提醒你回来继续。"
+    : waitingLong
+      ? copy("trialSlow", "这次准备得比平时久一些。你可以重新检查；关闭窗口也不会中断准备。")
+      : "通常几分钟内会有结果。你可以关闭窗口，下次打开时继续查看。";
   if (accessReady) {
-    accessStatus.textContent = "已开通，可以继续";
+    accessStatus.textContent = copy("readyTitle", "搭手已经准备好了");
     accessStatus.className = "setup-status ready";
     applyButton.textContent = "已开通";
     applyButton.disabled = true;
   } else if (["pending", "provisioning"].includes(status)) {
-    accessStatus.textContent = status === "provisioning" ? "管理员已同意，正在准备" : "申请已发送，等待管理员同意";
+    accessStatus.textContent = status === "provisioning"
+      ? copy("trialProvisioningTitle", "正在为这台电脑准备搭手")
+      : copy("trialPendingTitle", "已经收到，正在确认试用名额");
     accessStatus.className = "setup-status waiting";
-    applyButton.textContent = "等待审核";
+    applyButton.textContent = "正在准备";
     applyButton.disabled = true;
   } else if (status === "rejected") {
-    accessStatus.textContent = accessState.reason || "申请未通过，请联系管理员";
+    accessStatus.textContent = accessState.reason || "这次暂时没有合适的试用名额";
     accessStatus.className = "setup-status";
-    applyButton.textContent = "重新申请";
+    applyButton.textContent = "再试一次";
     applyButton.disabled = applying;
   } else if (["expired", "revoked"].includes(status)) {
-    accessStatus.textContent = status === "expired" ? "使用期限已结束，如需继续可重新申请" : "使用权限已结束，如需继续可重新申请";
+    accessStatus.textContent = status === "expired" ? "这段试用已经结束" : "这台电脑目前没有使用名额";
     accessStatus.className = "setup-status";
-    applyButton.textContent = "重新申请";
+    applyButton.textContent = "再次加入";
     applyButton.disabled = applying;
   } else {
-    accessStatus.textContent = applying ? "正在发送申请" : "尚未申请";
+    accessStatus.textContent = applying ? "正在告诉我们" : copy("trialIdle", "还没有加入");
     accessStatus.className = applying ? "setup-status waiting" : "setup-status";
-    applyButton.textContent = applying ? "正在提交…" : "开始申请";
+    applyButton.textContent = applying ? "正在发送…" : copy("joinTrial", "加入试用");
     applyButton.disabled = applying;
   }
   $("save-start").disabled = !(accessReady && hasRoots);
@@ -201,18 +274,24 @@ async function loadSetupState() {
       }
       existing = await invoke("configuration");
       accessReady = Boolean(existing?.hasPilotToken);
+      if (lastAccessStatus !== "activated" && notifyWhenReady) {
+        try {
+          if (await isPermissionGranted()) sendNotification({ title: "搭手已经准备好了", body: "回来选择你愿意使用的文件夹，就可以继续。" });
+        } catch {}
+      }
     } else if (accessState.status !== "not_applied") {
       accessReady = false;
     }
   } catch (error) {
     if (!accessReady && !["pending", "provisioning"].includes(accessState.status)) {
-      showAccessError(error);
+      if (!$("access-error").textContent.trim()) showAccessError(error);
       if (!applicationStatusFailureRecorded) {
         applicationStatusFailureRecorded = true;
         void recordEvent("application_status_failed", "error", diagnosticErrorCode(error), accessState.applicationId);
       }
     }
   }
+  lastAccessStatus = accessState.status;
   renderSetupState();
 }
 
@@ -389,6 +468,36 @@ $("apply-access").addEventListener("click", async () => {
   }
 });
 
+async function refreshAccessNow() {
+  clearAccessError();
+  try {
+    await loadSetupState();
+  } catch (error) {
+    showAccessError(error);
+  }
+}
+
+$("refresh-access").addEventListener("click", () => { void refreshAccessNow(); });
+$("retry-access").addEventListener("click", () => { void $("apply-access").click(); });
+
+$("notify-ready").addEventListener("click", async () => {
+  if (notifyWhenReady) return;
+  try {
+    let granted = await isPermissionGranted();
+    if (!granted) granted = (await requestPermission()) === "granted";
+    if (granted) {
+      notifyWhenReady = true;
+      localStorage.setItem("dashou-notify-ready", "yes");
+      $("notify-ready").textContent = "准备好后会提醒你";
+      $("access-wait-copy").textContent = "你可以关闭窗口。准备好后，系统会提醒你回来继续。";
+    } else {
+      $("access-wait-copy").textContent = "没有开启提醒也没关系。你可以关闭窗口，下次打开搭手时继续查看。";
+    }
+  } catch {
+    $("access-wait-copy").textContent = "这次没能开启提醒。你可以关闭窗口，下次打开搭手时继续查看。";
+  }
+});
+
 $("choose-folder").addEventListener("click", async () => {
   $("setup-error").textContent = "";
   try {
@@ -512,7 +621,7 @@ $("copy-diagnostics").addEventListener("click", async () => {
   try {
     const report = await invoke("diagnostic_report");
     await writeText(JSON.stringify(report, null, 2), { label: "Dashou 排查信息" });
-    $("diagnostic-status").textContent = "已复制，请发给管理员。";
+    $("diagnostic-status").textContent = "已复制，请发给我们。";
   } catch {
     $("diagnostic-status").textContent = "复制失败，请再试一次。";
   }
@@ -525,6 +634,9 @@ $("check-update").addEventListener("click", async () => {
 
 void recordEvent("app_opened");
 
+await loadCopy();
+await confirmUiReady();
+
 refresh().catch((error) => {
   showSetupError(error);
   setup.classList.remove("hidden");
@@ -533,7 +645,19 @@ refresh().catch((error) => {
 // Discover updates in the background, but never install or restart while the
 // user is applying, choosing folders or starting the local service.
 void checkForUpdate({ silent: true });
+setTimeout(() => {
+  if (!configuring && !applying && !restarting) {
+    void loadCopy({ checkRemote: true });
+    void invoke("check_ui_update").catch(() => {});
+  }
+}, 4_000);
 setInterval(() => { void checkForUpdate({ silent: true }); }, UPDATE_INTERVAL_MS);
+setInterval(() => {
+  if (!configuring && !applying && !restarting) {
+    void loadCopy({ checkRemote: true });
+    void invoke("check_ui_update").catch(() => {});
+  }
+}, UPDATE_INTERVAL_MS);
 setInterval(() => { void refresh().catch((error) => {
   $("connect-chatgpt").disabled = true;
   $("status-dot").className = "dot bad";
