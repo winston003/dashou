@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { provisionDeviceTunnel } from "./cloudflare.js";
+import { deleteDeviceTunnel, provisionDeviceTunnel } from "./cloudflare.js";
 
 test("Cloudflare provisioner creates a remote-managed tunnel, ingress and DNS record", async (context) => {
   const calls = [];
@@ -72,6 +72,46 @@ test("Cloudflare provisioner reuses matching tunnel and DNS resources", async (c
   assert.equal(result.tunnelId, "tunnel-existing");
   assert.equal(calls.length, 4);
   assert.equal(calls.some((call) => call.init.method === "POST"), false);
+});
+
+test("Cloudflare deprovisioner deletes only the matching registered DNS record and tunnel", async (context) => {
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  const tunnelId = "259c5a2a-ae41-4bd0-a189-bd84da4065fb";
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).includes("/dns_records?")) {
+      return response([
+        { id: "dns-match", name: "device-test.warmbyte.studio", content: `${tunnelId}.cfargotunnel.com` },
+        { id: "dns-other", name: "device-test.warmbyte.studio", content: "other.cfargotunnel.com" },
+      ]);
+    }
+    if (String(url).endsWith("/dns_records/dns-match") && init.method === "DELETE") return response({ id: "dns-match" });
+    if (String(url).endsWith(`/cfd_tunnel/${tunnelId}`) && init.method === "DELETE") return response({ id: tunnelId });
+    throw new Error(`Unexpected Cloudflare request: ${url}`);
+  };
+  const result = await deleteDeviceTunnel({
+    CLOUDFLARE_ACCOUNT_ID: "account-123",
+    CLOUDFLARE_ZONE_ID: "zone-123",
+    CLOUDFLARE_API_TOKEN: "cloudflare-api-secret",
+    DASHOU_PUBLIC_DOMAIN: "warmbyte.studio",
+  }, { tunnelId, hostname: "device-test.warmbyte.studio" });
+  assert.equal(result.deletedDnsRecords, 1);
+  assert.equal(calls.length, 3);
+  assert.equal(calls.some((call) => call.url.includes("dns-other")), false);
+});
+
+test("Cloudflare deprovisioner rejects resources outside the Dashou domain", async () => {
+  await assert.rejects(() => deleteDeviceTunnel({
+    CLOUDFLARE_ACCOUNT_ID: "account-123",
+    CLOUDFLARE_ZONE_ID: "zone-123",
+    CLOUDFLARE_API_TOKEN: "cloudflare-api-secret",
+    DASHOU_PUBLIC_DOMAIN: "warmbyte.studio",
+  }, {
+    tunnelId: "259c5a2a-ae41-4bd0-a189-bd84da4065fb",
+    hostname: "unrelated.example.com",
+  }), /outside DASHOU_PUBLIC_DOMAIN/);
 });
 
 function response(result, status = 200) {

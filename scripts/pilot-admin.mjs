@@ -45,6 +45,13 @@ if (scope === "applications") {
   }
 } else if (scope === "accounts") {
   await legacyAccounts(action, subject, args[3]);
+} else if (scope === "reset") {
+  const confirm = option("--confirm");
+  if (confirm !== "DELETE_ALL_DASHOU_PILOT_DATA") {
+    throw new Error("为防止误删，必须提供 --confirm DELETE_ALL_DASHOU_PILOT_DATA");
+  }
+  const payload = await call("POST", "/admin/reset", { confirm });
+  console.log(`Dashou 内测云端状态已清空；删除设备连接：${payload.deletedDevices ?? 0}`);
 } else if (["list", "create", "enable", "disable", "revoke", "expire"].includes(scope)) {
   await legacyAccounts(scope, action, subject);
 } else {
@@ -206,6 +213,7 @@ function printHelp() {
     "  dashou admin applications approve <申请编号> --period week|month|quarter|year",
     "  dashou admin applications reject <申请编号> [--reason 原因]",
     "  dashou admin applications revoke <申请编号>",
+    "  dashou admin reset --confirm DELETE_ALL_DASHOU_PILOT_DATA",
     "",
     "默认只列出待审核申请；使用 --status activated 查看已开通，或 --status all 查看全部。",
     "首次使用请运行：npm run pilot:admin:setup；配置会保存在本机 ~/.dashou/pilot-admin.json。",

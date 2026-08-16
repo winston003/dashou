@@ -1,4 +1,4 @@
-import { provisionDeviceTunnel } from "./cloudflare.js";
+import { deleteDeviceTunnel, provisionDeviceTunnel } from "./cloudflare.js";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const ACCOUNT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
@@ -8,6 +8,7 @@ const APPLICATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/;
 const PERIODS = new Set(["week", "month", "quarter", "year"]);
 const CONTROL_PLANE_VERSION = "0.1.3-rc.2";
 const DEFAULT_LEASE_TTL_SECONDS = 15 * 60;
+const RESET_CONFIRMATION = "DELETE_ALL_DASHOU_PILOT_DATA";
 
 export default {
   async fetch(request, env) {
@@ -51,6 +52,7 @@ async function routeRequest(request, env) {
   }
 
   if (url.pathname === "/admin/applications" && request.method === "GET") return adminApplicationList(request, env, url);
+  if (url.pathname === "/admin/reset" && request.method === "POST") return adminReset(request, env);
   const adminApplicationMatch = /^\/admin\/applications\/([^/]+)$/.exec(url.pathname);
   if (adminApplicationMatch && request.method === "GET") {
     return adminApplicationDetail(request, env, decodeURIComponent(adminApplicationMatch[1]));
@@ -175,6 +177,33 @@ async function adminApplicationDetail(request, env, applicationId) {
   const row = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
   if (!row) throw new HttpError(404, `Application not found: ${applicationId}`);
   return json({ application: adminApplicationSummary(row) });
+}
+
+async function adminReset(request, env) {
+  requireAdmin(request, env);
+  const body = await jsonObject(request);
+  if (body.confirm !== RESET_CONFIRMATION) {
+    throw new HttpError(400, `confirm must equal ${RESET_CONFIRMATION}`);
+  }
+  const result = await env.DB.prepare(
+    "SELECT application_id, tunnel_id, hostname FROM pilot_applications WHERE tunnel_id IS NOT NULL OR hostname IS NOT NULL ORDER BY created_at",
+  ).all();
+  const registeredDevices = (result.results ?? []).filter((row) => row.tunnel_id || row.hostname);
+  const deprovisioner = typeof env.DEVICE_DEPROVISIONER === "function" ? env.DEVICE_DEPROVISIONER : deleteDeviceTunnel;
+  const deletedDevices = [];
+  for (const row of registeredDevices) {
+    if (!row.tunnel_id || !row.hostname) {
+      throw new HttpError(409, `Application ${row.application_id} has incomplete Cloudflare resource metadata`);
+    }
+    deletedDevices.push(await deprovisioner(env, { tunnelId: row.tunnel_id, hostname: row.hostname }));
+  }
+  if (typeof env.DB.batch !== "function") throw new Error("D1 batch support is required");
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM pilot_application_rate_limits"),
+    env.DB.prepare("DELETE FROM pilot_applications"),
+    env.DB.prepare("DELETE FROM pilot_accounts"),
+  ]);
+  return json({ reset: true, deletedDevices: deletedDevices.length });
 }
 
 async function adminApproveApplication(request, env, applicationId) {

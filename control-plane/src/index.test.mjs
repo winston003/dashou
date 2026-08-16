@@ -329,6 +329,38 @@ test("Worker health exposes the deployment build SHA", async () => {
   });
 });
 
+test("admin reset requires authorization and explicit confirmation, then deletes registered Dashou resources", async () => {
+  const db = new FakeD1();
+  db.rows.set("pilot-test", { account_id: "pilot-test", token_hash: "hash" });
+  db.rateLimits.set("network.hour", 3);
+  db.applications.set("req_abcdefghijklmnop", {
+    application_id: "req_abcdefghijklmnop",
+    tunnel_id: "259c5a2a-ae41-4bd0-a189-bd84da4065fb",
+    hostname: "device-test.warmbyte.studio",
+    created_at: "2026-08-16T00:00:00.000Z",
+  });
+  const deleted = [];
+  const env = {
+    DB: db,
+    PILOT_ADMIN_TOKEN: ADMIN_TOKEN,
+    DEVICE_DEPROVISIONER: async (_env, device) => { deleted.push(device); return device; },
+  };
+  assert.equal((await request("POST", "/admin/reset", { env, body: { confirm: "DELETE_ALL_DASHOU_PILOT_DATA" } })).status, 401);
+  assert.equal((await request("POST", "/admin/reset", { env, token: ADMIN_TOKEN, body: { confirm: "no" } })).status, 400);
+  const reset = await request("POST", "/admin/reset", { env, token: ADMIN_TOKEN, body: { confirm: "DELETE_ALL_DASHOU_PILOT_DATA" } });
+  assert.equal(reset.status, 200);
+  assert.deepEqual(await reset.json(), { reset: true, deletedDevices: 1 });
+  assert.deepEqual(deleted, [{
+    tunnelId: "259c5a2a-ae41-4bd0-a189-bd84da4065fb",
+    hostname: "device-test.warmbyte.studio",
+  }]);
+  assert.equal(db.rows.size, 0);
+  assert.equal(db.applications.size, 0);
+  assert.equal(db.rateLimits.size, 0);
+  const repeated = await request("POST", "/admin/reset", { env, token: ADMIN_TOKEN, body: { confirm: "DELETE_ALL_DASHOU_PILOT_DATA" } });
+  assert.deepEqual(await repeated.json(), { reset: true, deletedDevices: 0 });
+});
+
 function testKeyPair() {
   const pair = generateKeyPairSync("rsa", { modulusLength: 2048 });
   return {
@@ -420,6 +452,21 @@ class FakeStatement {
   }
 
   async run() {
+    if (this.sql === "DELETE FROM pilot_application_rate_limits") {
+      const changes = this.db.rateLimits.size;
+      this.db.rateLimits.clear();
+      return result(changes);
+    }
+    if (this.sql === "DELETE FROM pilot_applications") {
+      const changes = this.db.applications.size;
+      this.db.applications.clear();
+      return result(changes);
+    }
+    if (this.sql === "DELETE FROM pilot_accounts") {
+      const changes = this.db.rows.size;
+      this.db.rows.clear();
+      return result(changes);
+    }
     if (this.sql.startsWith("INSERT INTO pilot_application_rate_limits")) {
       const key = `${this.values[0]}.${this.values[1]}`;
       this.db.rateLimits.set(key, (this.db.rateLimits.get(key) ?? 0) + 1);
