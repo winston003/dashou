@@ -10,6 +10,8 @@
 - Mac Intel：Intel 处理器的 Mac
 - Windows：Windows 安装包
 
+如果你使用的是 Mac，请先看 [macOS 免费内测版安装说明](MACOS_INSTALL.md)。第一次打开未公证的内测包时，macOS 可能会要求你对 Dashou 点右键并选择“打开”，这是一次性的系统确认。
+
 安装后打开 **搭手 Dashou**。
 
 ## 2. 加入试用

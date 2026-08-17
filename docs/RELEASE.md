@@ -15,12 +15,13 @@ Release 页面按平台明确列出安装文件，并内置首次使用说明。
 每个桌面 Release 的正文都要保留下面这组信息，不要只贴构建产物名称：
 
 1. Mac Apple Silicon、Mac Intel、Windows 三个下载入口。
-2. 一句话说明：安装后打开搭手，加入试用；搭手准备好后选择文件夹。
-3. “去 ChatGPT 连接”按钮的下一步说明和截图。
-4. ChatGPT 插件页的直接入口：<https://chatgpt.com/plugins?view=personal>。
-5. 如果页面没有“创建应用”，明确告诉用户去 ChatGPT **设置 → 应用（Apps）→ 高级设置（Advanced settings）→ 开发者模式（Developer mode）**；工作区管理员则使用 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）**。
-6. 关闭窗口只会收起搭手；搭手会留在 macOS 顶部菜单栏。要停止它，从菜单栏选择“退出搭手”。
-7. 本版本最近变化，以及已知限制。
+2. macOS 免费内测包的首次打开说明：应用程序 → 右键 Dashou → 打开 → 打开。
+3. 一句话说明：安装后打开搭手，加入试用；搭手准备好后选择文件夹。
+4. “去 ChatGPT 连接”按钮的下一步说明和截图。
+5. ChatGPT 插件页的直接入口：<https://chatgpt.com/plugins?view=personal>。
+6. 如果页面没有“创建应用”，明确告诉用户去 ChatGPT **设置 → 应用（Apps）→ 高级设置（Advanced settings）→ 开发者模式（Developer mode）**；工作区管理员则使用 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）**。
+7. 关闭窗口只会收起搭手；搭手会留在 macOS 顶部菜单栏。要停止它，从菜单栏选择“退出搭手”。
+8. 本版本最近变化，以及已知限制。
 
 不要在 Release 正文或截图中放入本机绝对路径、连接密码、Tunnel Token、OAuth 信息或管理员 token。
 
@@ -33,16 +34,23 @@ Release 页面按平台明确列出安装文件，并内置首次使用说明。
 - [Mac Intel](https://github.com/winston003/dashou-releases/releases/download/desktop-<version>/dashou-<version>-darwin-x86_64.dmg)
 - [Windows](https://github.com/winston003/dashou-releases/releases/download/desktop-<version>/dashou-<version>-windows-x86_64-setup.exe)
 
+macOS 免费内测版第一次安装时，会看到下面这个“应用程序 + Dashou”窗口：
+
+![macOS 安装窗口](https://raw.githubusercontent.com/winston003/dashou/desktop-v<version>/docs/images/macos-dmg-install-window.jpg)
+
 ## 5 分钟开始使用
 
-1. 安装并打开搭手，点击“加入试用”。
-2. 搭手准备好后，点击“添加文件夹”，选择一个或多个工作文件夹，再点击“开始使用”。
-3. 点击“去 ChatGPT 连接”。搭手会自动复制地址并打开 ChatGPT。
-4. 在 ChatGPT“个人”页点击“创建应用”，粘贴地址；需要密码时回到搭手点击“复制授权密码”。
+1. Mac 内测版第一次打开：把 Dashou 拖到“应用程序”，然后在“应用程序”中右键 Dashou，选择“打开”，再确认一次“打开”。Windows 用户直接运行安装包。
+2. 安装并打开搭手，点击“加入试用”。
+3. 搭手准备好后，点击“添加文件夹”，选择一个或多个工作文件夹，再点击“开始使用”。
+4. 点击“去 ChatGPT 连接”。搭手会自动复制地址并打开 ChatGPT。
+5. 在 ChatGPT“个人”页点击“创建应用”，粘贴地址；需要密码时回到搭手点击“复制授权密码”。
 
 ChatGPT 插件页：[直接打开](https://chatgpt.com/plugins?view=personal)。
 
 ![搭手首次设置](https://raw.githubusercontent.com/winston003/dashou/desktop-v<version>/docs/images/first-setup.jpg)
+
+macOS 免费内测版的安装图文说明：[打开 macOS 安装说明](https://github.com/winston003/dashou/blob/main/docs/MACOS_INSTALL.md)。
 
 ![搭手已准备好](https://raw.githubusercontent.com/winston003/dashou/desktop-v<version>/docs/images/ready-to-connect.jpg)
 
@@ -92,6 +100,12 @@ npm run verify:release
 npm run verify:control-plane
 npm run verify:desktop
 ```
+
+## macOS 免费内测模式
+
+当前没有 Apple Developer 账号时，GitHub Actions 默认使用 `adhoc` 模式构建 macOS 内测包。这个包可以安装和运行，但用户第一次打开时需要在“应用程序”中右键 Dashou，选择“打开”，再确认一次“打开”。它不会通过 Apple 公证，因此不能承诺消除 macOS 的首次安全提示。
+
+手动运行工作流时，`macos_signing_mode` 保持 `adhoc`。以后完成 Apple Developer 配置后，再选择 `developer-id`；该模式才会要求并使用 `APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_API_KEY_CONTENT`、`APPLE_API_KEY` 和 `APPLE_API_ISSUER`。
 
 控制面部署脚本拒绝脏工作树：
 

@@ -55,6 +55,8 @@ dashou admin applications list
 
 完整图文版见 [GETTING_STARTED.md](GETTING_STARTED.md)。
 
+Mac 免费内测版第一次打开可能会看到“无法验证开发者”。这是因为当前包还没有 Apple 签名和公证，不是搭手服务故障。请用户把 Dashou 拖到“应用程序”，然后在“应用程序”中右键 Dashou，选择“打开”，再点击一次“打开”。完整图文步骤见 [MACOS_INSTALL.md](MACOS_INSTALL.md)。不要让用户关闭 Mac 的整体安全检查，也不要让用户输入终端命令。
+
 用户只需要四步：
 
 1. 从客服发送的 GitHub Release 页面安装 Dashou。
