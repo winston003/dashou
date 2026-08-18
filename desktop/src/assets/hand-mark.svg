@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="搭手">
+  <defs>
+    <linearGradient id="hand" x1="16" y1="9" x2="49" y2="54" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#62e4e7"/>
+      <stop offset="1" stop-color="#2571e6"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#hand)" d="M25.2 8.2c-2.6 0-4.7 2.1-4.7 4.7v17.2l-3.7-4.9a4.8 4.8 0 0 0-7.7 5.7l9.5 12.8a12.6 12.6 0 0 0 10.1 5.1h8.6c7 0 12.7-5.7 12.7-12.7V22.8a4.7 4.7 0 0 0-9.4 0v6.9-14.3a4.7 4.7 0 0 0-9.4 0v14.3V12.9a4.7 4.7 0 0 0-4.7-4.7Zm10.3 5.8a1.8 1.8 0 0 1 3.6 0v17.3a1.5 1.5 0 0 0 3 0v-8.5a1.8 1.8 0 0 1 3.6 0v13.3c0 5.4-4.4 9.8-9.8 9.8h-8.6c-3.1 0-6.1-1.5-8-4l-9.5-12.8a1.9 1.9 0 1 1 3-2.3l6.3 8.4a1.5 1.5 0 0 0 2.7-.9V12.9a1.8 1.8 0 0 1 3.6 0v17.1a1.5 1.5 0 0 0 3 0V14a1.8 1.8 0 0 1 3.6 0v16a1.5 1.5 0 0 0 3 0V14Z"/>
+  <path d="M25 38.1c2 3 5.5 4.7 9.1 4.7 3.7 0 7.1-1.7 9.2-4.7" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="2.8"/>
+</svg>

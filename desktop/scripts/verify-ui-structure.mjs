@@ -1,34 +1,48 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const html = await readFile(join(root, "index.html"), "utf8");
-const javascript = await readFile(join(root, "src", "main.js"), "utf8");
+const source = await Promise.all([
+  readFile(join(root, "src", "App.tsx"), "utf8"),
+  readFile(join(root, "src", "bridge.ts"), "utf8"),
+  readFile(join(root, "src", "state.ts"), "utf8"),
+  readFile(join(root, "src", "main.tsx"), "utf8"),
+  readFile(join(root, "src", "ErrorBoundary.tsx"), "utf8"),
+  readFile(join(root, "src", "components", "SettingsView.tsx"), "utf8"),
+]);
 const stylesheet = await readFile(join(root, "src", "styles.css"), "utf8");
-const builtInCopy = JSON.parse(await readFile(join(root, "copy", "default.json"), "utf8"));
+const catalog = JSON.parse(await readFile(join(root, "copy", "default.json"), "utf8"));
+const tauri = JSON.parse(await readFile(join(root, "src-tauri", "tauri.conf.json"), "utf8"));
+const allSource = source.join("\n");
 
-const htmlIds = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
-assert.equal(new Set(htmlIds).size, htmlIds.length, "desktop HTML must not contain duplicate ids");
-
-const referencedIds = [...javascript.matchAll(/\$\("([^"]+)"\)/g)].map((match) => match[1]);
-for (const id of new Set(referencedIds)) {
-  assert(htmlIds.includes(id), `main.js references missing HTML id: ${id}`);
+assert(!existsSync(join(root, "src", "main.js")), "the old DOM entrypoint must be removed");
+assert(existsSync(join(root, "src", "assets", "hand-mark.svg")), "the hand brand mark must be packaged with the UI");
+assert(existsSync(join(root, "src", "assets", "mascot.png")), "the onboarding mascot must be packaged with the UI");
+assert(existsSync(join(root, "..", "assets", "brand", "dashou-hero.jpg")), "the README hero image must be present");
+assert(allSource.includes("./assets/hand-mark.svg"), "the UI must use the hand brand mark");
+assert(allSource.includes("./assets/mascot.png"), "the setup page must use the mascot");
+assert(html.includes("/src/main.tsx"), "index.html must load the typed Preact entrypoint");
+assert(!/<script(?![^>]*type=["']module)[^>]*>/.test(html), "index.html must not contain inline scripts");
+assert(!/\beval\s*\(|new Function\s*\(/.test(allSource), "UI must not use eval or runtime code generation");
+assert(allSource.includes("confirmUiReady"), "UI must confirm downloaded content after Bridge handshake");
+assert(allSource.includes("update_allowed_roots"), "UI must use transactional root updates");
+assert(allSource.includes("set_preferences"), "UI must persist preferences through the Bridge");
+assert(allSource.includes("ErrorBoundary"), "UI must have a crash fallback");
+assert(!/class=["']version["']/.test(source[0]), "the use page must not repeat the version badge");
+assert(/\.toast\s*\{[^}]*opacity:\s*0/.test(stylesheet), "toast must be hidden until it has a message");
+assert(/min-width:\s*760px/.test(stylesheet), "desktop UI must support the minimum window width");
+const mainWindow = tauri.app?.windows?.find((window) => window.label === "main");
+assert.equal(mainWindow?.width, 880, "default desktop width must remain 880px");
+assert.equal(mainWindow?.height, 700, "default desktop height must remain 700px");
+assert.equal(mainWindow?.minWidth, 760, "minimum desktop width must remain 760px");
+assert.equal(mainWindow?.minHeight, 560, "minimum desktop height must remain 560px");
+assert.equal(catalog.schemaVersion, 1, "built-in copy schema must be version 1");
+for (const key of ["setupTitle", "startSetup", "readyTitle", "trustBody", "helpPath", "autostart"]) {
+  assert.equal(typeof catalog.messages[key], "string", `missing built-in copy value: ${key}`);
 }
-
-const accessStep = html.indexOf('<div class="setup-step">');
-const applyButton = html.indexOf('id="apply-access"');
-const folderStep = html.indexOf('id="folder-step"');
-const folderButton = html.indexOf('id="choose-folder"');
-assert(accessStep >= 0 && accessStep < applyButton, "join-trial step must always be visible");
-assert(folderStep > applyButton && folderStep < folderButton, "folder controls must be inside the gated folder step");
-assert(javascript.includes('location.protocol === "dashou-ui:"'), "built-in UI must not acknowledge a downloaded UI update");
-assert(/\.hidden\s*\{[^}]*display:\s*none\s*!important/.test(stylesheet), "hidden utility must override button display styles");
-
-for (const key of ["setupTitle", "joinTrial", "readyTitle", "trustBody", "failureBody"]) {
-  assert(typeof builtInCopy.messages[key] === "string", `missing built-in copy value: ${key}`);
-}
-
-console.log(`desktop UI structure ok: ${htmlIds.length} unique ids, ${new Set(referencedIds).size} referenced ids`);
+console.log(`desktop UI structure ok: Preact entrypoint, Bridge v2 surfaces, ${Object.keys(catalog.messages).length} copy keys`);

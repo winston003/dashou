@@ -1,5 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <rect width="256" height="256" rx="56" fill="#9b6339"/>
-  <path d="M61 78c0-10 8-18 18-18h98c10 0 18 8 18 18v100c0 10-8 18-18 18H79c-10 0-18-8-18-18V78Z" fill="#f6f1e9"/>
-  <path d="M91 106h74M91 132h74M91 158h44" stroke="#9b6339" stroke-width="14" stroke-linecap="round"/>
+  <defs>
+    <linearGradient id="background" x1="34" y1="24" x2="220" y2="232" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#dffcff"/>
+      <stop offset="1" stop-color="#236ee0"/>
+    </linearGradient>
+    <linearGradient id="hand" x1="80" y1="48" x2="180" y2="210" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff"/>
+      <stop offset="1" stop-color="#dffcff"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="58" fill="url(#background)"/>
+  <circle cx="128" cy="128" r="92" fill="#1261d2" opacity=".16"/>
+  <path fill="url(#hand)" d="M104 48c-10 0-18 8-18 18v68l-15-20c-7-9-20-11-29-4-9 7-11 20-4 29l38 51c12 16 31 25 51 25h35c28 0 50-22 50-50v-48c0-10-8-18-18-18s-18 8-18 18v-28c0-10-8-18-18-18s-18 8-18 18V66c0-10-8-18-18-18Zm40 22c0-4 3-7 7-7s7 3 7 7v70c0 6 8 7 10 1v-18c0-4 3-7 7-7s7 3 7 7v42c0 18-14 32-32 32h-35c-14 0-27-7-35-18l-38-51c-2-3-2-7 1-9 3-2 7-2 9 1l25 33c5 7 16 3 16-5V66c0-4 3-7 7-7s7 3 7 7v68c0 6 8 7 10 1V72c0-4 3-7 7-7s7 3 7 7v64c0 6 8 7 10 1V70Z"/>
+  <path d="M102 172c9 13 24 20 40 20s31-7 40-20" fill="none" stroke="#2d82e8" stroke-linecap="round" stroke-width="11"/>
 </svg>

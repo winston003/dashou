@@ -68,7 +68,6 @@ interface Fixture {
   client: Client;
   project: string;
 }
-
 async function fixture(t: TestContext): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), "dashou-mcp-"));
   const project = join(root, "project");

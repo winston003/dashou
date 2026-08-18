@@ -3,94 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>搭手 Dashou</title>
+    <meta name="color-scheme" content="light" />
+    <title>搭手</title>
   </head>
   <body>
-    <main class="shell">
-      <header>
-        <div class="eyebrow">WARMBYTE</div>
-        <h1>搭手</h1>
-        <p class="subtitle">让 ChatGPT 安全地使用你授权的本地项目。</p>
-      </header>
-
-      <section id="setup" class="card hidden">
-        <h2 id="setup-title" data-copy="setupTitle">让这台电脑用上搭手</h2>
-        <p id="setup-intro" data-copy="setupIntro">目前是小范围试用。我们会先确认当前名额；有名额后，搭手会自动为这台电脑做好准备。</p>
-        <div class="setup-step">
-          <span class="step-number">1</span>
-          <div class="step-copy">
-            <strong data-copy="joinTrial">加入试用</strong>
-            <span id="access-status" data-copy="trialIdle">还没有加入</span>
-          </div>
-          <button id="apply-access" class="primary" type="button">加入试用</button>
-          <div id="access-progress" class="access-progress hidden" aria-live="polite">
-            <ol>
-              <li class="done">已经收到</li>
-              <li id="progress-prepare">正在确认名额</li>
-              <li id="progress-check">准备连接</li>
-              <li id="progress-done">准备完成</li>
-            </ol>
-            <p id="access-wait-copy">通常几分钟内会有结果。你可以关闭窗口，下次打开时继续查看。</p>
-            <div class="inline-actions">
-              <button id="refresh-access" type="button">重新检查</button>
-              <button id="notify-ready" type="button">准备好后提醒我</button>
-            </div>
-          </div>
-          <div id="access-feedback" class="access-feedback hidden" aria-live="assertive">
-            <strong data-copy="failureTitle">这次没有准备好</strong>
-            <p id="access-error" data-copy="failureBody"></p>
-            <button id="retry-access" class="secondary compact" type="button">重新准备</button>
-            <button id="copy-diagnostics" class="secondary compact" type="button">复制排查信息</button>
-            <span id="diagnostic-status"></span>
-          </div>
-        </div>
-        <div id="folder-step" class="setup-step hidden">
-          <span class="step-number">2</span>
-          <div class="step-copy">
-            <strong>选择工作文件夹</strong>
-            <span id="roots-count">可选择一个或多个文件夹</span>
-          </div>
-          <div class="roots-picker">
-            <div id="roots-list" class="roots-list" aria-live="polite"></div>
-            <button id="choose-folder" type="button">添加文件夹</button>
-          </div>
-        </div>
-        <button id="save-start" class="primary" disabled>开始使用</button>
-        <button id="cancel-setup" class="secondary hidden" type="button">取消</button>
-        <details class="invite-fallback">
-          <summary>已有管理员邀请文件</summary>
-          <p>仅在管理员要求时使用。</p>
-          <button id="import-invite" type="button">选择邀请文件</button>
-        </details>
-        <p id="setup-error" class="error" aria-live="assertive"></p>
-        <aside class="trust-note">
-          <strong data-copy="trustTitle">你始终做主</strong>
-          <p data-copy="trustBody">文件读取和修改只发生在你选择的文件夹中。运行项目命令时，搭手会使用你当前电脑账户的权限。你可以随时添加或移除文件夹。</p>
-        </aside>
-      </section>
-
-      <section id="ready" class="card hidden">
-        <div class="status-row"><span id="status-dot" class="dot"></span><strong id="status-text">准备中</strong></div>
-        <p id="ready-copy">搭手正在检查连接。</p>
-        <div class="actions primary-actions">
-          <button id="connect-chatgpt" class="primary">去 ChatGPT 连接</button>
-          <button id="copy-code">复制授权密码</button>
-          <button id="restart-daemon" class="primary hidden">重新启动</button>
-        </div>
-        <p class="resident-note">关闭窗口后，搭手仍会在顶部菜单栏运行。需要停止服务时，请从菜单栏选择“退出搭手”。</p>
-        <details class="more-actions">
-          <summary>其他操作</summary>
-          <div class="actions">
-            <button id="copy-address">复制连接地址</button>
-            <button id="check-update">检查更新</button>
-            <button id="reconfigure">重新设置</button>
-          </div>
-        </details>
-        <p id="message" class="message"></p>
-      </section>
-
-      <footer><span>你选择，搭手才使用</span><span id="app-version"></span></footer>
-    </main>
-    <script type="module" src="/src/main.js"></script>
+    <div id="app"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

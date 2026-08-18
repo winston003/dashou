@@ -33,7 +33,7 @@ async function packageUi() {
     path,
     manifestPath: join(outputRoot, "ui-latest.json"),
     url: `${releaseRepo}/ui-current/${filename}`,
-    bridgeVersion: 1,
+    bridgeVersion: 2,
   });
 }
 

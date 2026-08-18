@@ -42,7 +42,6 @@ export interface DashouProjectInstruction {
   path: string;
   content: string;
 }
-
 export interface DashouProject {
   name: string;
   path: string;
@@ -153,8 +152,9 @@ export class DashouWorkspaceRegistry {
     return selected.join("\n");
   }
 
-  async writeText(workspaceId: string, filePath: string, content: string): Promise<void> {
-    if (Buffer.byteLength(content, "utf8") > MAX_WRITE_BYTES) {
+  async writeText(workspaceId: string, filePath: string, content: string): Promise<number> {
+    const byteLength = Buffer.byteLength(content, "utf8");
+    if (byteLength > MAX_WRITE_BYTES) {
       throw new Error(`Content is too large to write directly (max ${MAX_WRITE_BYTES} bytes)`);
     }
     const workspace = this.requireWorkspace(workspaceId);
@@ -162,6 +162,7 @@ export class DashouWorkspaceRegistry {
     await mkdir(dirname(target), { recursive: true });
     await this.assertPhysicalPathInside(workspace.root, dirname(target));
     await atomicWrite(target, content);
+    return byteLength;
   }
 
   async editText(

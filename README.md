@@ -1,8 +1,29 @@
 # 搭手 Dashou
 
-让 ChatGPT 直接、安全地操作你明确授权的本地文件和项目。
+让 ChatGPT 走进你的本地工作空间，帮你把事情做完。
 
-搭手是一个本地 MCP 执行器。它运行在用户自己的电脑上，把少量、清晰的本地能力提供给 ChatGPT：打开项目、读取文件、写入文件、修改文件和执行命令。
+![搭手：你的本地工作搭档](assets/brand/dashou-hero.jpg)
+
+搭手是一款桌面工具。安装后，你可以让 ChatGPT 在自己选择的工作文件夹中读取项目、修改代码、运行测试和执行命令。你只需要描述想做什么，不必在 ChatGPT 和电脑之间反复复制粘贴。
+
+> 本地执行 · 由你授权 · 结果可见 · 随时停止
+
+## 给第一次使用的人
+
+### 四步开始
+
+1. 从[最新版本](https://github.com/winston003/dashou-releases/releases/latest)下载并安装搭手。
+2. 打开搭手，点击“开始使用搭手”，等待准备完成。
+3. 选择一个或多个你愿意使用的工作文件夹。
+4. 点击“去 ChatGPT 连接”，完成一次连接；之后可以在 ChatGPT 网页版、桌面版或手机端发起对话，让它处理你的工作区。
+
+搭手不会主动浏览你的电脑。只有你选择的文件夹才会交给 ChatGPT 使用；你可以随时添加、移除文件夹，或从菜单栏退出搭手。
+
+例如，你可以直接说：
+
+> 先看看这个项目现在是什么状态，然后修复测试失败的问题，最后运行测试并告诉我改了什么。
+
+普通用户只需要看上面的安装流程；下面的内容是给开发者、管理员和内测维护者看的。
 
 当前版本的目标不是做完整 Agent OS，而是验证一个最小产品假设：用户是否愿意持续使用 ChatGPT 直接完成本地工作，并为这种便利付费。
 
@@ -17,9 +38,9 @@ ChatGPT 只看到 6 个工具：
 
 - `list_projects`：列出用户明确授权的项目目录，不扫描整个磁盘。
 - `open_project`：打开一个已经授权的本地项目目录。
-- `read`：读取项目内文件。
-- `write`：创建或完整覆盖文件。
-- `edit`：对文件做明确、可审查的局部修改。
+- `read`：读取项目内文本文件。
+- `write`：创建或完整覆盖文本文件。
+- `edit`：对文本文件做明确、可审查的局部修改。
 - `execute`：在项目目录内执行命令、测试、构建、Git 检查和搜索。
 
 V0 默认不开放 Task、多 Agent、Review、Lease、Worktree、Skills、Cloud Workspace 或长期 Memory。
@@ -29,7 +50,7 @@ V0 默认不开放 Task、多 Agent、Review、Lease、Worktree、Skills、Cloud
 
 - 只能打开初始化时明确授权的目录。
 - 文件路径必须保持在授权根目录内。
-- 模型侧要求文件修改优先通过 `write` / `edit` 显式发生；这样变更边界更清楚。
+- 模型侧要求文件修改通过 `write` / `edit`，命令通过 `execute` 明确发生；这样变更边界更清楚。
 - `execute` 拥有本地用户的命令执行权限，运行的程序本身仍可能修改文件，因此必须通过 OAuth 连接密码保护。它**不是操作系统沙箱**；V0 只额外拦截少数明显危险命令。
 - 文件工具会同时检查授权根目录、项目边界和符号链接逃逸；`write` / `edit` 使用同目录原子替换。
 - OAuth 客户端和 Token 使用轻量 JSON 状态持久化，不再依赖 SQLite。
@@ -77,7 +98,7 @@ npm run pack:pilot       # 通过检查后生成当前版本的 releases/warmbyt
 ```
 
 安装包 smoke 会在全新临时环境验证安装、`doctor --json`、OAuth、Streamable HTTP
-以及六个工具的项目发现、读写和命令执行闭环：
+以及六个工具的项目发现、文本读写和命令执行闭环：
 
 ```bash
 npm run verify:pilot
@@ -106,7 +127,7 @@ npm run verify:public
 ```
 
 它会启动一个隔离测试目录、Dashou 和临时 Cloudflare Quick Tunnel，完成公网健康检查、OAuth、
-六工具列表以及读写修改执行闭环后自动关闭。Quick Tunnel 没有稳定域名；该命令也不代表真实
+六工具列表以及读取、文本修改和命令执行闭环后自动关闭。Quick Tunnel 没有稳定域名；该命令也不代表真实
 ChatGPT UI 或真实用户验收。
 
 安装后的诊断和升级检查：
@@ -124,8 +145,8 @@ OPENAI_API_KEY='由用户自己注入' npm run verify:openai:local
 ```
 
 该命令会安装当前包到临时目录，启动 Dashou 和一次性 Cloudflare Quick Tunnel，让模型发送真实
-Responses API 消息并调用六个工具，最后检查临时文件和命令输出。写入、修改、执行只作用于该命令
-创建的临时目录；需要明确设置 `OPENAI_MCP_AUTO_APPROVE_MUTATIONS=1` 才会自动批准这三个变更工具：
+Responses API 消息并导入六个工具，最后检查临时文件和命令输出。写入、修改和执行只作用于该命令
+创建的临时目录；需要明确设置 `OPENAI_MCP_AUTO_APPROVE_MUTATIONS=1` 才会自动批准变更工具：
 
 ```bash
 OPENAI_MCP_AUTO_APPROVE_MUTATIONS=1 OPENAI_API_KEY='由用户自己注入' npm run verify:openai:local

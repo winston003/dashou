@@ -13,7 +13,6 @@ const autoApproveMutations = process.env.OPENAI_MCP_AUTO_APPROVE_MUTATIONS === "
 if (mcpUrl.pathname.replace(/\/+$/, "") !== "/mcp") {
   throw new Error("DASHOU_MCP_URL must point to the Dashou /mcp endpoint");
 }
-
 const oauth = await obtainAccessToken(mcpUrl, ownerToken);
 const allowedTools = ["list_projects", "open_project", "read", "write", "edit", "execute"];
 const tool = {

@@ -78,7 +78,6 @@ try {
   }
   await rm(temp, { recursive: true, force: true });
 }
-
 async function oauthClient(baseUrl, owner) {
   const redirectUri = "http://127.0.0.1/callback";
   const registration = await jsonFetch(`${baseUrl}/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ client_name: "ChatGPT Pilot Smoke", redirect_uris: [redirectUri], token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"] }) });

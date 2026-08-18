@@ -15,7 +15,34 @@ use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
 
 mod ui_update;
 
-struct DaemonState(Mutex<Option<Child>>);
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UiError {
+    code: String,
+    retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostic_id: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct RuntimeMeta {
+    recovery_attempts: u8,
+    public_health_failures: u8,
+    observed_ready: bool,
+    phase: String,
+    error: Option<UiError>,
+    desired_running: bool,
+    supervisor_started: bool,
+}
+
+struct DaemonRuntime {
+    child: Option<Child>,
+    meta: RuntimeMeta,
+}
+
+struct DaemonState(Mutex<DaemonRuntime>);
+
+const PUBLIC_HEALTH_FAILURE_LIMIT: u8 = 3;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -39,6 +66,8 @@ CnV7X4Fsv34cquKbIeGemYmNA+haV4iZ6S6zB07EY3G+eSA4lrrrzrEv5JTlN1pD
 U052we/MXg0gRacZ6IZluzRCu1ap07TJZAPAjo9eURQYKa3BfVcPu6cU4hevuauw
 RQIDAQAB
 -----END PUBLIC KEY-----"#;
+
+const RUNTIME_RETRY_DELAYS_SECONDS: [u64; 4] = [0, 1, 3, 10];
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,6 +94,37 @@ struct DesktopStatus {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DesktopSnapshot {
+    version: String,
+    configured: bool,
+    allowed_roots: Vec<String>,
+    runtime_phase: String,
+    local_health: bool,
+    public_health: bool,
+    mcp_url: Option<String>,
+    recovery_attempts: u8,
+    error: Option<UiError>,
+    launch_at_login: bool,
+    notify_when_ready: bool,
+    content_version: String,
+    ui_source: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct StoredPreferences {
+    #[serde(default = "default_true")]
+    launch_at_login: bool,
+    #[serde(default)]
+    notify_when_ready: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DesktopConfiguration {
     allowed_roots: Vec<String>,
     public_base_url: String,
@@ -82,7 +142,7 @@ struct InviteFile {
     tunnel_token: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct StoredConfig {
     host: String,
@@ -192,6 +252,13 @@ const DIAGNOSTIC_STAGES: &[&str] = &[
     "runtime_start_failed",
     "chatgpt_opened",
     "connection_password_copied",
+    "folder_added",
+    "folder_removed",
+    "runtime_recovering",
+    "runtime_blocked",
+    "update_checked",
+    "notification_enabled",
+    "connection_ready",
 ];
 
 #[tauri::command]
@@ -236,6 +303,172 @@ fn diagnostic_report(app: AppHandle) -> Result<DiagnosticReport, String> {
 }
 
 #[tauri::command]
+async fn desktop_snapshot(
+    app: AppHandle,
+    state: State<'_, DaemonState>,
+) -> Result<DesktopSnapshot, String> {
+    desktop_snapshot_for(&app, &state).await
+}
+
+async fn desktop_snapshot_for(
+    app: &AppHandle,
+    state: &DaemonState,
+) -> Result<DesktopSnapshot, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let config_path = data_dir.join("config").join("config.json");
+    let config = read_stored_config(&config_path);
+    let configured = config
+        .as_ref()
+        .is_some_and(|value| !value.allowed_roots.is_empty())
+        && configuration_is_ready(&config_path, &data_dir.join("config").join("auth.json"));
+    let (
+        phase_hint,
+        recovery_attempts,
+        error,
+        public_health_failures,
+        observed_ready,
+    ) = {
+        let guard = state.0.lock().map_err(|_| "后台服务状态锁已损坏")?;
+        (
+            guard.meta.phase.clone(),
+            guard.meta.recovery_attempts,
+            guard.meta.error.clone(),
+            guard.meta.public_health_failures,
+            guard.meta.observed_ready,
+        )
+    };
+    let running =
+        daemon_is_running_state(state) || external_daemon_is_running(&data_dir.join("state"));
+    let public_url = config.as_ref().map(|value| value.public_base_url.clone());
+    let port = config.as_ref().map(|value| value.port).unwrap_or(7677);
+    let local_health = if running {
+        probe_health(&format!("http://127.0.0.1:{port}/healthz")).await
+    } else {
+        false
+    };
+    let public_health = if running {
+        match public_url.as_deref() {
+            Some(url) => probe_health(&format!("{}/healthz", url.trim_end_matches('/'))).await,
+            None => false,
+        }
+    } else {
+        false
+    };
+    let (runtime_phase, next_public_health_failures, next_observed_ready) =
+        resolve_runtime_phase(
+            configured,
+            &phase_hint,
+            running,
+            local_health,
+            public_health,
+            public_health_failures,
+            observed_ready,
+        );
+    if let Ok(mut guard) = state.0.lock() {
+        guard.meta.public_health_failures = next_public_health_failures;
+        guard.meta.observed_ready = next_observed_ready;
+        if guard.meta.phase != "blocked" {
+            guard.meta.phase = runtime_phase.clone();
+        }
+    }
+    let prefs = read_preferences(&data_dir.join("preferences.json"));
+    let ui = ui_update::ui_bundle_status(app.clone()).unwrap_or(ui_update::UiBundleStatus {
+        source: "built-in",
+        version: None,
+        update_available: false,
+        changed: false,
+    });
+    Ok(DesktopSnapshot {
+        version: env!("CARGO_PKG_VERSION").into(),
+        configured,
+        allowed_roots: config.map(|value| value.allowed_roots).unwrap_or_default(),
+        runtime_phase,
+        local_health,
+        public_health,
+        mcp_url: public_url.map(|url| format!("{}/mcp", url.trim_end_matches('/'))),
+        recovery_attempts,
+        error,
+        launch_at_login: prefs.launch_at_login,
+        notify_when_ready: prefs.notify_when_ready,
+        content_version: ui.version.unwrap_or_else(|| "built-in".into()),
+        ui_source: ui.source.into(),
+    })
+}
+
+#[tauri::command]
+async fn update_allowed_roots(
+    app: AppHandle,
+    state: State<'_, DaemonState>,
+    allowed_roots: Vec<String>,
+) -> Result<DesktopSnapshot, String> {
+    validate_allowed_roots(&allowed_roots)?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let config_path = data_dir.join("config").join("config.json");
+    let previous =
+        read_stored_config(&config_path).ok_or_else(|| "[NOT_CONFIGURED]".to_string())?;
+    let was_running = daemon_is_running_state(&state);
+    if was_running {
+        stop_child(&state)?;
+    }
+    let next = StoredConfig {
+        allowed_roots,
+        ..previous.clone()
+    };
+    let result = write_json_atomic(&config_path, &next, false);
+    if let Err(error) = result {
+        if was_running {
+            let _ = start_daemon_inner(&app, &state);
+        }
+        return Err(error);
+    }
+    if let Err(error) = start_daemon_inner(&app, &state) {
+        let _ = write_json_atomic(&config_path, &previous, false);
+        let _ = start_daemon_inner(&app, &state);
+        return Err(format!("[ROOTS_UPDATE_ROLLBACK] {error}"));
+    }
+    desktop_snapshot_for(&app, &state).await
+}
+
+#[tauri::command]
+async fn set_preferences(
+    app: AppHandle,
+    state: State<'_, DaemonState>,
+    launch_at_login: Option<bool>,
+    notify_when_ready: Option<bool>,
+) -> Result<DesktopSnapshot, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let path = data_dir.join("preferences.json");
+    let mut prefs = read_preferences(&path);
+    if let Some(value) = launch_at_login {
+        prefs.launch_at_login = value;
+    }
+    if let Some(value) = notify_when_ready {
+        prefs.notify_when_ready = value;
+    }
+    write_json_atomic(&path, &prefs, true)?;
+    desktop_snapshot_for(&app, &state).await
+}
+
+#[tauri::command]
+async fn restart_runtime(
+    app: AppHandle,
+    state: State<'_, DaemonState>,
+) -> Result<DesktopSnapshot, String> {
+    stop_child(&state)?;
+    start_daemon_inner(&app, &state)?;
+    desktop_snapshot_for(&app, &state).await
+}
+
+#[tauri::command]
 async fn status(app: AppHandle, state: State<'_, DaemonState>) -> Result<DesktopStatus, String> {
     let data_dir = app
         .path()
@@ -244,7 +477,8 @@ async fn status(app: AppHandle, state: State<'_, DaemonState>) -> Result<Desktop
     let config_path = data_dir.join("config").join("config.json");
     let config_dir = data_dir.join("config");
     let configured = configuration_is_ready(&config_path, &config_dir.join("auth.json"));
-    let running = daemon_is_running(&state) || external_daemon_is_running(&data_dir.join("state"));
+    let running =
+        daemon_is_running_state(&state) || external_daemon_is_running(&data_dir.join("state"));
     let proxy = apply_system_proxy_environment();
     let (mcp_url, local_health, public_health) = if configured && running {
         let public_url = read_public_url(&config_path);
@@ -406,14 +640,14 @@ fn import_invite(app: AppHandle, path: String) -> Result<(), String> {
     let invite: InviteFile =
         serde_json::from_str(&text).map_err(|error| format!("邀请文件格式不正确：{error}"))?;
     if invite.kind != "dashou-invite" || invite.version != 1 {
-        return Err("这不是受支持的搭手邀请文件".into());
+        return Err("[INVITE_INVALID]".into());
     }
     if invite.pilot_token.trim().len() < 16 {
-        return Err("邀请文件缺少有效的内测授权".into());
+        return Err("[INVITE_AUTH_INVALID]".into());
     }
     let public_url = normalize_public_url(&invite.public_base_url)?;
     if !public_url.starts_with("https://") {
-        return Err("管理员邀请必须使用 HTTPS 公网地址".into());
+        return Err("[INVITE_UNSAFE]".into());
     }
 
     let data_dir = app
@@ -457,16 +691,7 @@ fn import_invite(app: AppHandle, path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn configure(app: AppHandle, settings: DesktopSettings) -> Result<(), String> {
-    if settings.allowed_roots.is_empty() {
-        return Err("至少需要一个授权目录".into());
-    }
-    if settings
-        .allowed_roots
-        .iter()
-        .any(|root| !Path::new(root).is_absolute())
-    {
-        return Err("授权目录必须使用绝对路径".into());
-    }
+    validate_allowed_roots(&settings.allowed_roots)?;
     let data_dir = app
         .path()
         .app_data_dir()
@@ -517,11 +742,10 @@ fn configure(app: AppHandle, settings: DesktopSettings) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), String> {
+fn start_daemon_once(app: &AppHandle, state: &DaemonState) -> Result<(), String> {
     apply_system_proxy_environment();
     let mut guard = state.0.lock().map_err(|_| "后台服务状态锁已损坏")?;
-    if let Some(child) = guard.as_mut() {
+    if let Some(child) = guard.child.as_mut() {
         if child
             .try_wait()
             .map_err(|error| error.to_string())?
@@ -529,7 +753,7 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
         {
             return Ok(());
         }
-        *guard = None;
+        guard.child = None;
     }
     let data_dir = app
         .path()
@@ -537,14 +761,14 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
         .map_err(|error| error.to_string())?;
     let config_dir = data_dir.join("config");
     if !config_dir.join("config.json").exists() || !config_dir.join("auth.json").exists() {
-        return Err("请先完成第一次设置".into());
+        return Err("[NOT_CONFIGURED]".into());
     }
     match live_lock_owner(&data_dir.join("state")) {
         Some(LiveLockOwner::Dashou(pid)) => {
             return Err(format!("DASHOU_ALREADY_RUNNING:{pid}"));
         }
         Some(LiveLockOwner::Other | LiveLockOwner::Unknown) => {
-            return Err("DASHOU_OTHER_PROCESS".into());
+            return Err("[OTHER_PROCESS]".into());
         }
         None => {}
     }
@@ -565,7 +789,7 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
     let cloudflared = resource_root.join("cloudflared").join(cloudflared_name());
     for required in [&node, &cli, &cloudflared] {
         if !required.exists() {
-            return Err(format!("安装包缺少运行资源：{}", required.display()));
+            return Err("[MISSING_RESOURCES]".into());
         }
     }
     let runtime_dir = resource_root.join("dashou-runtime");
@@ -589,11 +813,11 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
         .create(true)
         .append(true)
         .open(&log_path)
-        .map_err(|error| format!("无法打开后台运行日志：{error}"))?;
+        .map_err(|_| "[RUNTIME_LOG_UNAVAILABLE]".to_string())?;
     set_private_file(&log_path)?;
     let log_file_for_stdout = log_file
         .try_clone()
-        .map_err(|error| format!("无法准备后台运行日志：{error}"))?;
+        .map_err(|_| "[RUNTIME_LOG_UNAVAILABLE]".to_string())?;
     let mut command = Command::new(node);
     command
         // The bundled Node 22 runtime supports this flag. Proxy environment
@@ -632,23 +856,143 @@ fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), Str
     }
     let mut child = command
         .spawn()
-        .map_err(|error| format!("无法启动搭手服务：{error}"))?;
+        .map_err(|_| "[RUNTIME_START_FAILED]".to_string())?;
     // A successful spawn only proves that the process was created. Check once
     // after startup so a configuration/runtime error cannot leave the UI
     // claiming that Dashou is running while port 7677 is already dead.
     thread::sleep(Duration::from_millis(350));
     if let Some(status) = child
         .try_wait()
-        .map_err(|error| format!("无法确认搭手服务状态：{error}"))?
+        .map_err(|_| "[RUNTIME_START_FAILED]".to_string())?
     {
-        return Err(format!(
-            "搭手服务启动后立即退出（{}）。运行日志：{}",
-            status,
-            log_path.display()
-        ));
+        let _ = status;
+        return Err("[RUNTIME_START_FAILED]".into());
     }
-    *guard = Some(child);
+    guard.child = Some(child);
     Ok(())
+}
+
+#[tauri::command]
+fn start_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), String> {
+    start_daemon_inner(&app, &state)
+}
+
+fn start_daemon_inner(app: &AppHandle, state: &DaemonState) -> Result<(), String> {
+    let mut last_error = "搭手暂时没有准备好".to_string();
+    if let Ok(mut guard) = state.0.lock() {
+        guard.meta.desired_running = true;
+    }
+    for (attempt, delay) in RUNTIME_RETRY_DELAYS_SECONDS.into_iter().enumerate() {
+        if delay > 0 {
+            thread::sleep(Duration::from_secs(delay));
+        }
+        if let Ok(mut guard) = state.0.lock() {
+            guard.meta.phase = if attempt == 0 {
+                "starting".into()
+            } else {
+                "recovering".into()
+            };
+            guard.meta.recovery_attempts = attempt as u8;
+            guard.meta.error = None;
+        }
+        match start_daemon_once(app, state) {
+            Ok(()) => {
+                if let Ok(mut guard) = state.0.lock() {
+                    guard.meta.phase = "connecting".into();
+                    guard.meta.recovery_attempts = 0;
+                    guard.meta.public_health_failures = 0;
+                    guard.meta.error = None;
+                }
+                spawn_supervisor(app.clone());
+                return Ok(());
+            }
+            Err(error) => {
+                last_error = error;
+                if last_error.starts_with("DASHOU_ALREADY_RUNNING:") {
+                    if let Ok(mut guard) = state.0.lock() {
+                        guard.meta.phase = "connecting".into();
+                    }
+                    return Ok(());
+                }
+                if last_error == "[OTHER_PROCESS]" {
+                    if let Ok(mut guard) = state.0.lock() {
+                        guard.meta.phase = "blocked".into();
+                        guard.meta.error = Some(UiError {
+                            code: "OTHER_PROCESS".into(),
+                            retryable: false,
+                            diagnostic_id: Some(format!("runtime-{}", unix_seconds())),
+                        });
+                        guard.meta.desired_running = false;
+                    }
+                    return Err(last_error);
+                }
+                if attempt == RUNTIME_RETRY_DELAYS_SECONDS.len() - 1 {
+                    if let Ok(mut guard) = state.0.lock() {
+                        guard.meta.phase = "blocked".into();
+                        guard.meta.error = Some(UiError {
+                            code: "RUNTIME_START_FAILED".into(),
+                            retryable: true,
+                            diagnostic_id: Some(format!("runtime-{}", unix_seconds())),
+                        });
+                        guard.meta.desired_running = false;
+                    }
+                    return Err(last_error);
+                }
+            }
+        }
+    }
+    Err(last_error)
+}
+
+fn spawn_supervisor(app: AppHandle) {
+    let should_spawn = app.try_state::<DaemonState>().is_some_and(|state| {
+        let Ok(mut guard) = state.0.lock() else {
+            return false;
+        };
+        if guard.meta.supervisor_started {
+            false
+        } else {
+            guard.meta.supervisor_started = true;
+            true
+        }
+    });
+    if !should_spawn {
+        return;
+    }
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(750));
+        let Some(state) = app.try_state::<DaemonState>() else {
+            break;
+        };
+        let should_restart = {
+            match state.0.lock() {
+                Ok(mut guard) => {
+                    if !guard.meta.desired_running {
+                        false
+                    } else if let Some(child) = guard.child.as_mut() {
+                        match child.try_wait() {
+                            Ok(None) => false,
+                            Ok(Some(_)) | Err(_) => {
+                                guard.child = None;
+                                guard.meta.phase = "recovering".into();
+                                guard.meta.recovery_attempts = 0;
+                                guard.meta.error = None;
+                                true
+                            }
+                        }
+                    } else {
+                        let data_dir = app.path().app_data_dir().ok();
+                        !data_dir
+                            .is_some_and(|path| external_daemon_is_running(&path.join("state")))
+                    }
+                }
+                Err(_) => false,
+            }
+        };
+        if should_restart {
+            let _ = start_daemon_inner(&app, &state);
+        }
+    });
 }
 
 #[tauri::command]
@@ -669,7 +1013,7 @@ fn take_over_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(),
     let Some(pid) = (match live_lock_owner(&state_dir) {
         Some(LiveLockOwner::Dashou(pid)) => Some(pid),
         Some(LiveLockOwner::Other | LiveLockOwner::Unknown) => {
-            return Err("发现其他程序占用了搭手服务，出于安全原因没有停止它".into());
+            return Err("[OTHER_PROCESS]".into());
         }
         None => None,
     }) else {
@@ -683,17 +1027,18 @@ fn take_over_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(),
     Ok(())
 }
 
-fn daemon_is_running(state: &State<'_, DaemonState>) -> bool {
+fn daemon_is_running_state(state: &DaemonState) -> bool {
     let Ok(mut guard) = state.0.lock() else {
         return false;
     };
-    let Some(child) = guard.as_mut() else {
+    let Some(child) = guard.child.as_mut() else {
         return false;
     };
     match child.try_wait() {
         Ok(None) => true,
         Ok(Some(_)) | Err(_) => {
-            *guard = None;
+            guard.child = None;
+            guard.meta.phase = "stopped".into();
             false
         }
     }
@@ -701,7 +1046,7 @@ fn daemon_is_running(state: &State<'_, DaemonState>) -> bool {
 
 fn stop_child(state: &State<'_, DaemonState>) -> Result<(), String> {
     let mut guard = state.0.lock().map_err(|_| "后台服务状态锁已损坏")?;
-    if let Some(mut child) = guard.take() {
+    if let Some(mut child) = guard.child.take() {
         let pid = child.id();
         #[cfg(unix)]
         {
@@ -739,6 +1084,10 @@ fn stop_child(state: &State<'_, DaemonState>) -> Result<(), String> {
         }
         let _ = child.wait();
     }
+    guard.meta.phase = "stopped".into();
+    guard.meta.recovery_attempts = 0;
+    guard.meta.error = None;
+    guard.meta.desired_running = false;
     Ok(())
 }
 
@@ -920,8 +1269,8 @@ fn read_port(path: &Path) -> Option<u16> {
 
 async fn probe_health(url: &str) -> bool {
     let Ok(client) = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(1))
-        .timeout(Duration::from_secs(2))
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(5))
         .build()
     else {
         return false;
@@ -940,6 +1289,57 @@ async fn probe_health(url: &str) -> bool {
     };
     payload.get("ok").and_then(serde_json::Value::as_bool) == Some(true)
         && payload.get("name").and_then(serde_json::Value::as_str) == Some("dashou")
+}
+
+fn resolve_runtime_phase(
+    configured: bool,
+    phase_hint: &str,
+    running: bool,
+    local_health: bool,
+    public_health: bool,
+    public_health_failures: u8,
+    observed_ready: bool,
+) -> (String, u8, bool) {
+    if !configured {
+        return ("needs_setup".into(), 0, false);
+    }
+
+    let next_observed_ready = observed_ready || (running && local_health && public_health);
+    let next_public_health_failures = if running && local_health && !public_health {
+        public_health_failures
+            .saturating_add(1)
+            .min(PUBLIC_HEALTH_FAILURE_LIMIT)
+    } else {
+        0
+    };
+
+    let phase = if phase_hint == "blocked" {
+        "blocked"
+    } else if running && local_health && public_health {
+        "ready"
+    } else if running && local_health {
+        if next_observed_ready && next_public_health_failures >= PUBLIC_HEALTH_FAILURE_LIMIT {
+            "recovering"
+        } else if next_observed_ready {
+            // Keep a known-good connection usable during a short network wobble.
+            "ready"
+        } else {
+            // First launch is still connecting; it is not recovering yet.
+            "connecting"
+        }
+    } else if running {
+        if next_observed_ready {
+            "recovering"
+        } else {
+            "connecting"
+        }
+    } else if phase_hint == "starting" || phase_hint == "recovering" {
+        phase_hint
+    } else {
+        "stopped"
+    };
+
+    (phase.into(), next_public_health_failures, next_observed_ready)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1184,6 +1584,36 @@ fn configuration_is_ready(config_path: &Path, auth_path: &Path) -> bool {
 
 fn read_stored_config(path: &Path) -> Option<StoredConfig> {
     serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
+}
+
+fn validate_allowed_roots(roots: &[String]) -> Result<(), String> {
+    if roots.is_empty() {
+        return Err("[ROOTS_REQUIRED]".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for root in roots {
+        let path = Path::new(root);
+        if !path.is_absolute() || !path.is_dir() {
+            return Err("[INVALID_ROOT]".into());
+        }
+        let canonical = path
+            .canonicalize()
+            .map_err(|_| "[INVALID_ROOT]".to_string())?;
+        if !seen.insert(canonical) {
+            return Err("[DUPLICATE_ROOT]".into());
+        }
+    }
+    Ok(())
+}
+
+fn read_preferences(path: &Path) -> StoredPreferences {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(StoredPreferences {
+            launch_at_login: true,
+            notify_when_ready: false,
+        })
 }
 
 fn read_pilot_token(config_dir: &Path) -> Option<String> {
@@ -1600,7 +2030,19 @@ fn path_separator() -> char {
 
 pub fn run() {
     tauri::Builder::default()
+        // This must be the first plugin: a second launch is routed to the
+        // already-running instance before it can create another window or
+        // attempt to start a second local runtime.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_process::init())
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .args(["--hidden"])
+                .app_name("Dashou")
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_shell::init())
@@ -1609,7 +2051,10 @@ pub fn run() {
         .register_uri_scheme_protocol("dashou-ui", |context, request| {
             ui_update::protocol_response(context.app_handle(), request)
         })
-        .manage(DaemonState(Mutex::new(None)))
+        .manage(DaemonState(Mutex::new(DaemonRuntime {
+            child: None,
+            meta: RuntimeMeta::default(),
+        })))
         .setup(|app| {
             let show_item = MenuItemBuilder::with_id("show", "显示搭手").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "退出搭手").build(app)?;
@@ -1632,6 +2077,26 @@ pub fn run() {
                 tray = tray.icon(icon).icon_as_template(true);
             }
             tray.build(app)?;
+            let started_hidden = std::env::args().any(|argument| argument == "--hidden");
+            if let Some(window) = app.get_webview_window("main") {
+                if started_hidden {
+                    let _ = window.hide();
+                } else {
+                    let _ = window.show();
+                }
+            }
+            let data_dir = app.path().app_data_dir()?;
+            if configuration_is_ready(
+                &data_dir.join("config").join("config.json"),
+                &data_dir.join("config").join("auth.json"),
+            ) {
+                let handle = app.handle().clone();
+                thread::spawn(move || {
+                    if let Some(state) = handle.try_state::<DaemonState>() {
+                        let _ = start_daemon_inner(&handle, &state);
+                    }
+                });
+            }
             if !cfg!(debug_assertions) {
                 if let Ok(Some(version)) = ui_update::recover_interrupted_update(app.handle()) {
                     let _ = ui_update::navigate_to_active(app.handle(), &version);
@@ -1641,6 +2106,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status,
+            desktop_snapshot,
+            update_allowed_roots,
+            set_preferences,
+            restart_runtime,
             connection_code,
             apply_for_access,
             application_status,
@@ -1676,6 +2145,14 @@ pub fn run() {
                 }
             }
         });
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 }
 
 #[cfg(test)]
@@ -1728,7 +2205,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.3-rc.3".into(),
+            version: "0.1.3-rc.7".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -1741,6 +2218,111 @@ mod tests {
     }
 
     #[test]
+    fn desktop_snapshot_does_not_serialize_secrets_or_file_contents() {
+        let snapshot = DesktopSnapshot {
+            version: "0.1.3-rc.7".into(),
+            configured: true,
+            allowed_roots: vec!["/work/project".into()],
+            runtime_phase: "ready".into(),
+            local_health: true,
+            public_health: true,
+            mcp_url: Some("https://device.warmbyte.studio/mcp".into()),
+            recovery_attempts: 0,
+            error: None,
+            launch_at_login: true,
+            notify_when_ready: false,
+            content_version: "built-in".into(),
+            ui_source: "built-in".into(),
+        };
+        let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
+        assert!(!json.contains("password"));
+        assert!(!json.contains("token"));
+        assert!(!json.contains("fileContent"));
+    }
+
+    #[test]
+    fn allowed_root_validation_rejects_empty_missing_and_accepts_directories() {
+        assert_eq!(validate_allowed_roots(&[]).unwrap_err(), "[ROOTS_REQUIRED]");
+        assert_eq!(
+            validate_allowed_roots(&["relative".into()]).unwrap_err(),
+            "[INVALID_ROOT]"
+        );
+        let root = test_root("allowed-root");
+        fs::create_dir_all(&root).expect("create allowed root");
+        assert!(validate_allowed_roots(&[root.to_string_lossy().into_owned()]).is_ok());
+        assert_eq!(
+            validate_allowed_roots(&[
+                root.to_string_lossy().into_owned(),
+                root.to_string_lossy().into_owned(),
+            ])
+            .unwrap_err(),
+            "[DUPLICATE_ROOT]"
+        );
+        fs::remove_dir_all(root).expect("remove allowed root");
+    }
+
+    #[test]
+    fn supervisor_retry_schedule_is_finite_and_matches_user_contract() {
+        assert_eq!(RUNTIME_RETRY_DELAYS_SECONDS, [0, 1, 3, 10]);
+        assert_eq!(RUNTIME_RETRY_DELAYS_SECONDS.len(), 4);
+        assert_eq!(RUNTIME_RETRY_DELAYS_SECONDS.last(), Some(&10));
+    }
+
+    #[test]
+    fn health_wobble_does_not_enter_recovery_before_three_failures() {
+        let first = resolve_runtime_phase(true, "connecting", true, true, false, 0, false);
+        assert_eq!(first, ("connecting".into(), 1, false));
+
+        let ready = resolve_runtime_phase(true, "connecting", true, true, true, first.1, first.2);
+        assert_eq!(ready, ("ready".into(), 0, true));
+
+        let wobble_one = resolve_runtime_phase(true, "ready", true, true, false, 0, true);
+        assert_eq!(wobble_one, ("ready".into(), 1, true));
+        let wobble_two = resolve_runtime_phase(true, "ready", true, true, false, wobble_one.1, wobble_one.2);
+        assert_eq!(wobble_two, ("ready".into(), 2, true));
+        let recovered = resolve_runtime_phase(true, "ready", true, true, false, wobble_two.1, wobble_two.2);
+        assert_eq!(recovered, ("recovering".into(), 3, true));
+
+        let healthy_again = resolve_runtime_phase(true, "recovering", true, true, true, recovered.1, recovered.2);
+        assert_eq!(healthy_again, ("ready".into(), 0, true));
+    }
+
+    #[test]
+    fn initial_public_failure_is_connecting_not_recovering() {
+        let snapshot = resolve_runtime_phase(true, "connecting", true, true, false, 2, false);
+        assert_eq!(snapshot.0, "connecting");
+        assert_eq!(snapshot.1, 3);
+        assert!(!snapshot.2);
+    }
+
+    #[test]
+    fn runtime_errors_are_structured_without_paths_or_process_details() {
+        for error in [
+            "[OTHER_PROCESS]",
+            "[RUNTIME_START_FAILED]",
+            "[MISSING_RESOURCES]",
+            "[NOT_CONFIGURED]",
+        ] {
+            assert!(error.starts_with('[') && error.ends_with(']'));
+            assert!(!error.contains("/"));
+            assert!(!error.contains("\\"));
+        }
+    }
+
+    #[test]
+    fn preferences_default_to_enabled_autostart_without_enabling_notifications() {
+        let root = test_root("preferences");
+        assert_eq!(
+            read_preferences(&root.join("preferences.json")).launch_at_login,
+            true
+        );
+        assert_eq!(
+            read_preferences(&root.join("preferences.json")).notify_when_ready,
+            false
+        );
+    }
+
+    #[test]
     fn diagnostic_report_contains_only_allowlisted_event_fields() {
         let root = test_root("diagnostics");
         append_diagnostic_event(
@@ -1750,7 +2332,7 @@ mod tests {
                 unix_seconds: 1_786_838_400,
                 stage: "application_submit_failed".into(),
                 outcome: "error".into(),
-                app_version: "0.1.3-rc.3".into(),
+                app_version: "0.1.3-rc.7".into(),
                 error_code: Some("CONTROL_CONNECT".into()),
                 application_id: None,
             },

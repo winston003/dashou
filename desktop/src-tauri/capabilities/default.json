@@ -9,6 +9,7 @@
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
     "process:default",
+    "autostart:default",
     "shell:allow-open",
     "updater:default",
     "notification:default"

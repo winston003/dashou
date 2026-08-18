@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { execFile as execFileCallback, execFileSync } from "node:child_process";
-import { readFile, rm, mkdtemp } from "node:fs/promises";
+import { mkdir, readFile, rm, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -10,12 +10,23 @@ import { installCliUpdate, updateCheck } from "../src/dashou-upgrade.ts";
 const execFile = promisify(execFileCallback);
 const repo = new URL("..", import.meta.url).pathname;
 const currentPackage = JSON.parse(await readFile(join(repo, "package.json"), "utf8"));
-const oldPackagePath = join(repo, "releases", "warmbyte-dashou-0.1.1.tgz");
 const currentPackagePath = join(repo, "releases", `warmbyte-dashou-${currentPackage.version}.tgz`);
-const oldMetadata = JSON.parse(execFileSync("tar", ["-xOzf", oldPackagePath, "package/package.json"], { encoding: "utf8" }));
 const bytes = await readFile(currentPackagePath);
 const packageSha256 = createHash("sha256").update(bytes).digest("hex");
 const tempPrefix = await mkdtemp(join(tmpdir(), "dashou-upgrade-asset-"));
+const oldPackageRoot = join(tempPrefix, "old-package");
+const oldPackagePath = join(tempPrefix, "warmbyte-dashou-0.1.1.tgz");
+
+// Keep the upgrade smoke self-contained. The historical 0.1.1 tarball is not
+// a source artifact and should not have to exist in an ignored local releases/
+// directory just to run the release gate. Repackage the current reviewed
+// artifact with an old version marker, then exercise a real npm global upgrade.
+await mkdir(oldPackageRoot, { recursive: true });
+execFileSync("tar", ["-xzf", currentPackagePath, "-C", oldPackageRoot]);
+const oldMetadata = JSON.parse(await readFile(join(oldPackageRoot, "package", "package.json"), "utf8"));
+oldMetadata.version = "0.1.1";
+await writeFile(join(oldPackageRoot, "package", "package.json"), JSON.stringify(oldMetadata, null, 2) + "\n");
+execFileSync("tar", ["-czf", oldPackagePath, "-C", oldPackageRoot, "package"]);
 
 try {
   const npmEnv = { ...process.env, npm_config_prefix: tempPrefix, npm_config_update_notifier: "false" };
