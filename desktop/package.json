@@ -1,7 +1,7 @@
 {
   "name": "@warmbyte/dashou-desktop",
   "private": true,
-  "version": "0.1.3-rc.4",
+  "version": "0.1.3-rc.6",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -9,6 +9,7 @@
     "test:structure": "node scripts/verify-ui-structure.mjs",
     "tauri:dev": "tauri dev",
     "tauri:build": "npm run release:check && npm run clean:updater-artifacts && tauri build",
+    "tauri:build:pilot": "env APPLE_SIGNING_IDENTITY=- sh -c 'npm run release:check && npm run clean:updater-artifacts && tauri build --bundles app,dmg --config src-tauri/tauri.pilot.conf.json'",
     "release:check": "node scripts/check-release-config.mjs",
     "clean:updater-artifacts": "node scripts/clean-updater-artifacts.mjs",
     "release:manifest": "node scripts/create-updater-manifest.mjs",

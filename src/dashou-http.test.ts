@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -232,6 +232,22 @@ test("OAuth + Streamable HTTP works end to end like a remote MCP host", async (t
   const toolsPayload = await rpcPayload(toolsResponse);
   const tools = (toolsPayload.result as { tools?: Array<{ name: string }> })?.tools ?? [];
   assert.deepEqual(tools.map((tool) => tool.name).sort(), ["edit", "execute", "list_projects", "open_project", "read", "write"]);
+
+  const openedResponse = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: { ...commonHeaders, "mcp-session-id": sessionId },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "open_project", arguments: { path: project } },
+    }),
+  });
+  assert.equal(openedResponse.status, 200);
+  const openedPayload = await rpcPayload(openedResponse);
+  const workspaceId = (openedPayload.result as { structuredContent?: { workspaceId?: string } })?.structuredContent?.workspaceId;
+  assert.ok(workspaceId);
+
 });
 
 test("shutdown closes an active Streamable HTTP SSE connection", async (t) => {

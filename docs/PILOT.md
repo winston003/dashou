@@ -70,7 +70,7 @@ Dashou 会自动复制连接地址并打开 ChatGPT。用户不需要安装 Node
 
 ChatGPT 个人插件页可直接打开：<https://chatgpt.com/plugins?view=personal>。
 当前页面显示“创建应用”按钮：点击它并粘贴搭手地址。如果没有“创建应用”，请打开 ChatGPT
-**设置 → 应用（Apps）→ 高级设置（Advanced settings）→ 开发者模式（Developer mode）**；工作区管理员可从 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）** 进入。
+**设置 → 插件 → 开发者模式**，勾选 **“开发人员模式”** 和 **“在开发者模式下强制执行 CSP”**；工作区管理员可从 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）** 进入。
 官方路径可能随账号类型和工作区策略变化，参考 [OpenAI 官方说明](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt)。
 关闭搭手窗口只会把它收起到 macOS 顶部菜单栏，后台连接不会因此停止；要真正停止服务，
 请从菜单栏选择“退出搭手”。
@@ -104,7 +104,7 @@ npm run verify:pilot
 ```
 
 `verify:pilot` 本身也可以独立执行：它会先生成当前版本的发布包，再验证全新安装、OAuth、
-Streamable HTTP、六个工具和本地操作闭环。
+Streamable HTTP、六个工具以及本地文本操作闭环。
 
 安装包内已经包含 Node.js 和 `cloudflared`。管理员可在发包前检查：
 
@@ -119,7 +119,7 @@ dashou upgrade --check
 OPENAI_MCP_AUTO_APPROVE_MUTATIONS=1 OPENAI_API_KEY='由用户自己注入' npm run verify:openai:local
 ```
 
-它会在临时目录安装当前包，启动一次性公网入口，让模型发送消息并完成 `list_projects`、`open_project`、`read`、
+它会在临时目录安装当前包，启动一次性公网入口，让模型发送消息并导入 `list_projects`、`open_project`、`read`、
 `write`、`edit`、`execute`，最后核对文件和命令输出。该命令不会触碰用户项目；API key 不要写入
 聊天或日志。结果属于 OpenAI Responses API 证据，不代表 ChatGPT 网页 UI 验收。
 
@@ -130,7 +130,7 @@ npm run verify:public
 ```
 
 该命令使用临时 Cloudflare Quick Tunnel 和一次性测试目录，验证公网 HTTPS、OAuth、六个 MCP
-工具以及本地读写修改执行；它完成后会自动关闭。结果明确属于兼容 MCP 客户端证据，不等于
+工具以及本地文本读写、修改与执行；它完成后会自动关闭。结果明确属于兼容 MCP 客户端证据，不等于
 ChatGPT UI 或首个真实用户任务。
 
 `doctor --json` 用于确认运行时、配置、受控试用状态和六工具能力契约；
@@ -241,7 +241,7 @@ https://xxx.warmbyte.studio/mcp
 ```
 
 桌面安装包的首次设置只需要申请开通和添加一个或多个文件夹。服务准备好后，
-点击“去 ChatGPT 连接”会复制连接地址并打开 ChatGPT 官方 Plugins 页面。用户在 ChatGPT“个人”页点击“创建应用”并粘贴地址，随后完成最终添加和授权；授权页需要密码时，回到 Dashou 点击“复制授权密码”再粘贴。若页面没有“创建应用”，按账号类型在 ChatGPT 的“设置 → 应用（Apps）→ 高级设置（Advanced settings）”开启开发者模式，或由工作区管理员从“工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）”进入。
+点击“去 ChatGPT 连接”会复制连接地址并打开 ChatGPT 官方 Plugins 页面。用户在 ChatGPT“个人”页点击“创建应用”并粘贴地址，随后完成最终添加和授权；授权页需要密码时，回到 Dashou 点击“复制授权密码”再粘贴。若页面没有“创建应用”，按账号类型在 ChatGPT 的“设置 → 插件 → 开发者模式”中勾选“开发人员模式”和“在开发者模式下强制执行 CSP”，或由工作区管理员从“工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）”进入。
 
 连接后模型只能看到六个工具：
 
@@ -271,7 +271,7 @@ export OPENAI_API_KEY='由用户自己注入，不要写入聊天或日志'
 npm run verify:openai
 ```
 
-它会验证 `mcp_list_tools` 只有六个工具并发送真实模型消息；写入、修改、执行默认需要 approval。
+它会验证 `mcp_list_tools` 只有六个工具并发送真实模型消息；写入、修改和执行默认需要 approval。
 明确审核过一次性目录后才设置 `OPENAI_MCP_AUTO_APPROVE_MUTATIONS=1`。该证据属于 OpenAI
 Responses API，不冒充 ChatGPT 网页或桌面 UI 验收。
 
@@ -280,6 +280,7 @@ Responses API，不冒充 ChatGPT 网页或桌面 UI 验收。
 不要让用户做专门设计的 Demo。让他选择一个今天本来就要完成的真实工作，例如：
 
 - 修改一份 Markdown / 文本资料。
+- 把 ChatGPT 生成或用户提供的图片、PDF 等原文件保存到授权目录，并核验清晰度与 SHA-256。
 - 批量整理一个小项目中的文件。
 - 修一个真实代码问题并运行测试。
 - 查找项目内容并生成或修改一个文件。

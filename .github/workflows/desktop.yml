@@ -397,7 +397,7 @@ jobs:
 
             ![搭手已准备好](https://raw.githubusercontent.com/winston003/dashou/${{ github.ref_name }}/docs/images/ready-to-connect.jpg)
 
-            如果看不到“创建应用”：打开 ChatGPT **设置 → 应用（Apps）→ 高级设置（Advanced settings）→ 开发者模式（Developer mode）**；工作区管理员可从 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）** 进入。
+            如果看不到“创建应用”：打开 ChatGPT **设置 → 插件 → 开发者模式**，勾选 **“开发人员模式”** 和 **“在开发者模式下强制执行 CSP”**；工作区管理员可从 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）** 进入。
 
             官方说明：[Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt)
 

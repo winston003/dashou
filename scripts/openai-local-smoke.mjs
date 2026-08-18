@@ -118,7 +118,7 @@ try {
     ingress: "ephemeral Cloudflare Quick Tunnel",
     model,
     tools: allowedTools,
-    message: "model sent a read request and continued with mutation/execute instructions",
+    message: "model sent a read request and continued with text mutation and execute instructions",
     calls: [...new Set([...readCalls, ...mutationCalls].map((call) => call.name))],
     project: "temporary disposable directory",
     chatgptBoundary: "This proves the OpenAI API MCP path, not ChatGPT UI or a real customer task.",

@@ -19,7 +19,7 @@ Release 页面按平台明确列出安装文件，并内置首次使用说明。
 3. 一句话说明：安装后打开搭手，加入试用；搭手准备好后选择文件夹。
 4. “去 ChatGPT 连接”按钮的下一步说明和截图。
 5. ChatGPT 插件页的直接入口：<https://chatgpt.com/plugins?view=personal>。
-6. 如果页面没有“创建应用”，明确告诉用户去 ChatGPT **设置 → 应用（Apps）→ 高级设置（Advanced settings）→ 开发者模式（Developer mode）**；工作区管理员则使用 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）**。
+6. 如果页面没有“创建应用”，明确告诉用户去 ChatGPT **设置 → 插件 → 开发者模式**，勾选 **“开发人员模式”** 和 **“在开发者模式下强制执行 CSP”**；工作区管理员则使用 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）**。
 7. 关闭窗口只会收起搭手；搭手会留在 macOS 顶部菜单栏。要停止它，从菜单栏选择“退出搭手”。
 8. 本版本最近变化，以及已知限制。
 
@@ -56,7 +56,7 @@ macOS 免费内测版的安装图文说明：[打开 macOS 安装说明](https:/
 
 ![ChatGPT 中的搭手连接详情](https://raw.githubusercontent.com/winston003/dashou/desktop-v<version>/docs/images/chatgpt-connection.jpg)
 
-如果看不到“创建应用”：打开 ChatGPT **设置 → 应用（Apps）→ 高级设置（Advanced settings）→ 开发者模式（Developer mode）**；工作区管理员可从 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）** 进入。打开后返回个人页。
+如果看不到“创建应用”：打开 ChatGPT **设置 → 插件 → 开发者模式**，勾选 **“开发人员模式”** 和 **“在开发者模式下强制执行 CSP”**；工作区管理员可从 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）** 进入。打开后返回个人页。
 
 官方说明：[Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt)
 

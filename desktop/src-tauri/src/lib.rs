@@ -1728,7 +1728,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.3-rc.3".into(),
+            version: "0.1.3-rc.6".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -1750,7 +1750,7 @@ mod tests {
                 unix_seconds: 1_786_838_400,
                 stage: "application_submit_failed".into(),
                 outcome: "error".into(),
-                app_version: "0.1.3-rc.3".into(),
+                app_version: "0.1.3-rc.6".into(),
                 error_code: Some("CONTROL_CONNECT".into()),
                 application_id: None,
             },

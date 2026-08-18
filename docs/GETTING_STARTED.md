@@ -48,7 +48,7 @@
 
 普通用户在 ChatGPT 中按下面的路径打开开发者模式：
 
-**头像或账户菜单 → 设置 → 应用（Apps）→ 高级设置（Advanced settings）→ 开发者模式（Developer mode）**
+**头像或账户菜单 → 设置 → 插件 → 开发者模式 → 勾选“开发人员模式”和“在开发者模式下强制执行 CSP”**
 
 打开后，回到 [ChatGPT 个人插件页](https://chatgpt.com/plugins?view=personal)，再点击 **创建应用**。
 

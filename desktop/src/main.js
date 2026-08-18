@@ -611,7 +611,7 @@ $("connect-chatgpt").addEventListener("click", async () => {
   try {
     await openExternal(CHATGPT_APPS_URL);
     void recordEvent("chatgpt_opened");
-    $("message").textContent = "ChatGPT 已打开：在“个人”页点击“创建应用”并粘贴地址。需要密码时，回到这里点击“复制授权密码”；若看不到“创建应用”，请在 ChatGPT 设置 → 应用（Apps）→ 高级设置（Advanced settings）中开启开发者模式。";
+    $("message").textContent = "ChatGPT 已打开：在“个人”页点击“创建应用”并粘贴地址。需要密码时，回到这里点击“复制授权密码”；若看不到“创建应用”，请打开 ChatGPT 设置 → 插件 → 开发者模式，勾选“开发人员模式”和“在开发者模式下强制执行 CSP”。";
   } catch {
     $("message").textContent = "ChatGPT 没有打开，请稍后再试。";
   }
