@@ -1487,13 +1487,15 @@ fn resolve_runtime_phase(
     } else if running && local_health && public_health {
         "ready"
     } else if running && local_health {
-        if next_observed_ready && next_public_health_failures >= PUBLIC_HEALTH_FAILURE_LIMIT {
+        if next_public_health_failures >= PUBLIC_HEALTH_FAILURE_LIMIT {
             "recovering"
         } else if next_observed_ready {
             // Keep a known-good connection usable during a short network wobble.
             "ready"
         } else {
-            // First launch is still connecting; it is not recovering yet.
+            // First launch is still connecting while the public endpoint is
+            // being checked. After a few failed checks, expose recovery
+            // instead of leaving the user in an endless "connecting" state.
             "connecting"
         }
     } else if running {
@@ -2612,7 +2614,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.3-rc.10".into(),
+            version: "0.1.3-rc.11".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -2627,7 +2629,7 @@ mod tests {
     #[test]
     fn desktop_snapshot_does_not_serialize_secrets_or_file_contents() {
         let snapshot = DesktopSnapshot {
-            version: "0.1.3-rc.10".into(),
+            version: "0.1.3-rc.11".into(),
             device_nickname: "搭手·青柠-4827".into(),
             device_fingerprint: "7F3A-91C2".into(),
             platform: "macos-aarch64".into(),
@@ -2714,11 +2716,15 @@ mod tests {
     }
 
     #[test]
-    fn initial_public_failure_is_connecting_not_recovering() {
-        let snapshot = resolve_runtime_phase(true, "connecting", true, true, false, 2, false);
-        assert_eq!(snapshot.0, "connecting");
-        assert_eq!(snapshot.1, 3);
-        assert!(!snapshot.2);
+    fn initial_public_failure_enters_recovery_after_three_failures() {
+        let first = resolve_runtime_phase(true, "connecting", true, true, false, 0, false);
+        assert_eq!(first, ("connecting".into(), 1, false));
+
+        let second = resolve_runtime_phase(true, "connecting", true, true, false, first.1, first.2);
+        assert_eq!(second, ("connecting".into(), 2, false));
+
+        let third = resolve_runtime_phase(true, "connecting", true, true, false, second.1, second.2);
+        assert_eq!(third, ("recovering".into(), 3, false));
     }
 
     #[test]
@@ -2758,7 +2764,7 @@ mod tests {
                 unix_seconds: 1_786_838_400,
                 stage: "application_submit_failed".into(),
                 outcome: "error".into(),
-                app_version: "0.1.3-rc.10".into(),
+                app_version: "0.1.3-rc.11".into(),
                 error_code: Some("CONTROL_CONNECT".into()),
                 application_id: None,
                 device_nickname: Some("搭手·青柠-4827".into()),

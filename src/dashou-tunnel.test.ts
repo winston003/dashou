@@ -7,7 +7,7 @@ test("Cloudflare Tunnel token is passed through environment, not process argumen
   const spec = cloudflaredRunSpec(token);
 
   assert.equal(spec.command, "cloudflared");
-  assert.deepEqual(spec.args, ["tunnel", "--no-autoupdate", "--loglevel", "warn", "run"]);
+  assert.deepEqual(spec.args, ["tunnel", "--no-autoupdate", "--protocol", "http2", "--loglevel", "warn", "run"]);
   assert.equal(spec.args.includes(token), false);
   assert.equal(spec.env.TUNNEL_TOKEN, token);
   assert.equal(spec.windowsHide, true);

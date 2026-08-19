@@ -19,7 +19,10 @@ export function cloudflaredRunSpec(token: string, environment: NodeJS.ProcessEnv
 
   return {
     command: environment.DASHOU_CLOUDFLARED_PATH?.trim() || "cloudflared",
-    args: ["tunnel", "--no-autoupdate", "--loglevel", "warn", "run"],
+    // QUIC is the cloudflared default, but it is frequently blocked by
+    // managed Windows networks and TUN/proxy clients. HTTP/2 uses the
+    // ordinary HTTPS path and lets cloudflared honor the detected proxy.
+    args: ["tunnel", "--no-autoupdate", "--protocol", "http2", "--loglevel", "warn", "run"],
     env: {
       ...environment,
       TUNNEL_TOKEN: normalized,

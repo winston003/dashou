@@ -258,13 +258,13 @@ test("client progress signals are authenticated, deduplicated and visible to the
     eventId: "evt_abcdefghijklmnop",
     stage: "app_opened",
     outcome: "ok",
-    appVersion: "0.1.3-rc.10",
+    appVersion: "0.1.3-rc.11",
     unixSeconds: 1_786_838_400,
   }, {
     eventId: "evt_qrstuvwxyz12345",
     stage: "application_submitted",
     outcome: "ok",
-    appVersion: "0.1.3-rc.10",
+    appVersion: "0.1.3-rc.11",
     unixSeconds: 1_786_838_401,
   }];
   assert.equal((await request("POST", `/applications/${created.applicationId}/events`, { env, body: { events } })).status, 401);
@@ -378,7 +378,7 @@ test("Worker health exposes the deployment build SHA", async () => {
   assert.deepEqual(await response.json(), {
     ok: true,
     name: "dashou-pilot-control",
-    version: "0.1.3-rc.10",
+    version: "0.1.3-rc.11",
     buildSha: "abc123",
   });
 });
