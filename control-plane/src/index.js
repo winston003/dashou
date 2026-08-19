@@ -6,10 +6,12 @@ const APPLICATION_ID_PATTERN = /^req_[A-Za-z0-9_-]{16,64}$/;
 const DEVICE_ID_PATTERN = /^dev_[A-Za-z0-9_-]{16,96}$/;
 const APPLICATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/;
 const PERIODS = new Set(["week", "month", "quarter", "year"]);
-const CONTROL_PLANE_VERSION = "0.1.3-rc.8";
+const CONTROL_PLANE_VERSION = "0.1.3-rc.9";
 const DEFAULT_LEASE_TTL_SECONDS = 15 * 60;
 const RESET_CONFIRMATION = "DELETE_ALL_DASHOU_PILOT_DATA";
 const CLIENT_EVENT_ID_PATTERN = /^evt_[A-Za-z0-9_-]{12,96}$/;
+const DEVICE_NICKNAME_PATTERN = /^搭手·[\p{L}\p{N}]{1,16}-\d{4}$/u;
+const DEVICE_FINGERPRINT_PATTERN = /^[A-F0-9]{4}-[A-F0-9]{4}$/;
 const CLIENT_EVENT_STAGES = new Set([
   "app_opened",
   "application_submit_started",
@@ -30,6 +32,7 @@ const CLIENT_EVENT_STAGES = new Set([
   "update_checked",
   "notification_enabled",
   "connection_ready",
+  "diagnostics_copied",
 ]);
 
 export default {
@@ -110,16 +113,25 @@ async function createApplication(request, env) {
   const deviceId = requiredString(body.deviceId, "deviceId");
   if (!DEVICE_ID_PATTERN.test(deviceId)) throw new HttpError(400, "deviceId is invalid");
   const deviceName = limitedString(body.deviceName, "deviceName", 100);
+  const deviceNickname = body.deviceNickname == null ? null : limitedString(body.deviceNickname, "deviceNickname", 40);
+  if (deviceNickname && !DEVICE_NICKNAME_PATTERN.test(deviceNickname)) throw new HttpError(400, "deviceNickname is invalid");
+  const deviceFingerprint = body.deviceFingerprint == null ? null : limitedString(body.deviceFingerprint, "deviceFingerprint", 20);
+  if (deviceFingerprint && !DEVICE_FINGERPRINT_PATTERN.test(deviceFingerprint)) throw new HttpError(400, "deviceFingerprint is invalid");
   const platform = limitedString(body.platform, "platform", 40);
   const contact = optionalLimitedString(body.contact, "contact", 200);
   const tokenHash = await sha256Base64Url(applicationToken);
 
   const existing = await env.DB.prepare(
-    "SELECT application_id, application_token_hash, status, created_at FROM pilot_applications WHERE device_id = ?1 AND status IN ('pending', 'provisioning', 'approved', 'activated')",
+    "SELECT application_id, application_token_hash, status, created_at, device_nickname, device_fingerprint FROM pilot_applications WHERE device_id = ?1 AND status IN ('pending', 'provisioning', 'approved', 'activated')",
   ).bind(deviceId).first();
   if (existing) {
     if (!constantTimeEqual(existing.application_token_hash, tokenHash)) {
       throw new HttpError(409, "This device already has an active application");
+    }
+    if ((deviceNickname && !existing.device_nickname) || (deviceFingerprint && !existing.device_fingerprint)) {
+      await env.DB.prepare(
+        "UPDATE pilot_applications SET device_nickname = COALESCE(device_nickname, ?1), device_fingerprint = COALESCE(device_fingerprint, ?2), updated_at = ?3 WHERE application_id = ?4",
+      ).bind(deviceNickname, deviceFingerprint, new Date().toISOString(), existing.application_id).run();
     }
     return json({ applicationId: existing.application_id, status: existing.status, createdAt: existing.created_at });
   }
@@ -129,8 +141,8 @@ async function createApplication(request, env) {
   const applicationId = `req_${randomToken().slice(0, 22)}`;
   const now = new Date().toISOString();
   await env.DB.prepare(
-    "INSERT INTO pilot_applications (application_id, application_token_hash, device_id, device_name, platform, contact, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7)",
-  ).bind(applicationId, tokenHash, deviceId, deviceName, platform, contact ?? null, now).run();
+    "INSERT INTO pilot_applications (application_id, application_token_hash, device_id, device_name, device_nickname, device_fingerprint, platform, contact, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?9)",
+  ).bind(applicationId, tokenHash, deviceId, deviceName, deviceNickname, deviceFingerprint, platform, contact ?? null, now).run();
   return json({ applicationId, status: "pending", createdAt: now }, 201);
 }
 
@@ -153,7 +165,7 @@ async function applicationStatus(request, env, applicationId) {
 }
 
 async function recordApplicationEvents(request, env, applicationId) {
-  await authorizedApplication(request, env, applicationId);
+  const application = await authorizedApplication(request, env, applicationId);
   const body = await jsonObject(request);
   if (!Array.isArray(body.events) || body.events.length < 1 || body.events.length > 50) {
     throw new HttpError(400, "events must contain between 1 and 50 items");
@@ -175,8 +187,8 @@ async function recordApplicationEvents(request, env, applicationId) {
       throw new HttpError(400, "event unixSeconds is invalid");
     }
     return env.DB.prepare(
-      "INSERT OR IGNORE INTO pilot_client_events (application_id, event_id, stage, outcome, error_code, app_version, client_unix_seconds, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-    ).bind(applicationId, eventId, stage, outcome, errorCode, appVersion, clientUnixSeconds, receivedAt);
+      "INSERT OR IGNORE INTO pilot_client_events (application_id, event_id, stage, outcome, error_code, app_version, client_unix_seconds, received_at, device_nickname, device_fingerprint) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    ).bind(applicationId, eventId, stage, outcome, errorCode, appVersion, clientUnixSeconds, receivedAt, application.device_nickname ?? null, application.device_fingerprint ?? null);
   });
   if (typeof env.DB.batch !== "function") throw new Error("D1 batch support is required");
   await env.DB.batch(statements);
@@ -234,7 +246,7 @@ async function adminApplicationDetail(request, env, applicationId) {
   const row = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
   if (!row) throw new HttpError(404, `Application not found: ${applicationId}`);
   const eventResult = await env.DB.prepare(
-    "SELECT event_id, stage, outcome, error_code, app_version, client_unix_seconds, received_at FROM pilot_client_events WHERE application_id = ?1 ORDER BY received_at, client_unix_seconds",
+    "SELECT event_id, stage, outcome, error_code, app_version, client_unix_seconds, received_at, device_nickname, device_fingerprint FROM pilot_client_events WHERE application_id = ?1 ORDER BY received_at, client_unix_seconds",
   ).bind(applicationId).all();
   return json({
     application: adminApplicationSummary(row),
@@ -246,6 +258,8 @@ async function adminApplicationDetail(request, env, applicationId) {
       appVersion: event.app_version,
       unixSeconds: event.client_unix_seconds,
       receivedAt: event.received_at,
+      ...(event.device_nickname ? { deviceNickname: event.device_nickname } : {}),
+      ...(event.device_fingerprint ? { deviceFingerprint: event.device_fingerprint } : {}),
     })),
   });
 }
@@ -415,6 +429,8 @@ function adminApplicationSummary(row) {
     ...applicationStatusSummary(row),
     deviceId: row.device_id,
     deviceName: row.device_name,
+    ...(row.device_nickname ? { deviceNickname: row.device_nickname } : {}),
+    ...(row.device_fingerprint ? { deviceFingerprint: row.device_fingerprint } : {}),
     platform: row.platform,
     ...(row.contact ? { contact: row.contact } : {}),
     ...(row.account_id ? { accountId: row.account_id } : {}),

@@ -15,6 +15,10 @@ export type UiError = {
 
 export type DesktopSnapshot = {
   version: string;
+  deviceNickname: string;
+  deviceFingerprint: string;
+  platform: string;
+  lastCheckedUnixSeconds: number;
   configured: boolean;
   allowedRoots: string[];
   runtimePhase: RuntimePhase;
@@ -120,6 +124,28 @@ export type CopyCatalog = {
   statusReady: string;
   applicationReceived: string;
   diagnosticsCopied: string;
+  troubleshootingTitle: string;
+  troubleshootingHint: string;
+  currentStatus: string;
+  currentStep: string;
+  deviceLabel: string;
+  recentCheck: string;
+  applicationLabel: string;
+  applicationNotStarted: string;
+  applicationWaiting: string;
+  applicationPreparing: string;
+  applicationReady: string;
+  applicationRejected: string;
+  applicationEnded: string;
+  stepNotApplied: string;
+  stepWaitingConfirmation: string;
+  stepPreparingConnection: string;
+  stepStartingLocalService: string;
+  stepRecoveringConnection: string;
+  stepReady: string;
+  stepRuntimeBlocked: string;
+  stepOtherConnection: string;
+  stepNeedsAttention: string;
   updateUnavailable: string;
   autostartFailure: string;
   notificationUnavailable: string;

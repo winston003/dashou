@@ -104,6 +104,10 @@ struct DesktopStatus {
 #[serde(rename_all = "camelCase")]
 struct DesktopSnapshot {
     version: String,
+    device_nickname: String,
+    device_fingerprint: String,
+    platform: String,
+    last_checked_unix_seconds: u64,
     configured: bool,
     allowed_roots: Vec<String>,
     runtime_phase: String,
@@ -181,6 +185,13 @@ struct StoredApplication {
     application_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DeviceIdentity {
+    device_nickname: String,
+    device_fingerprint: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ApplicationApiStatus {
@@ -235,6 +246,10 @@ struct DiagnosticEvent {
     error_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     application_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_nickname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -243,6 +258,11 @@ struct DiagnosticReport {
     product: &'static str,
     app_version: String,
     platform: String,
+    device_nickname: String,
+    device_fingerprint: String,
+    last_checked_unix_seconds: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    application_id: Option<String>,
     events: Vec<DiagnosticEvent>,
     privacy: &'static str,
 }
@@ -267,6 +287,7 @@ const DIAGNOSTIC_STAGES: &[&str] = &[
     "update_checked",
     "notification_enabled",
     "connection_ready",
+    "diagnostics_copied",
 ];
 
 #[tauri::command]
@@ -287,6 +308,7 @@ fn record_client_event(
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
+    let identity = load_or_create_device_identity(&data_dir)?;
     append_diagnostic_event(
         &data_dir,
         DiagnosticEvent {
@@ -297,6 +319,8 @@ fn record_client_event(
             app_version: env!("CARGO_PKG_VERSION").into(),
             error_code,
             application_id,
+            device_nickname: Some(identity.device_nickname),
+            device_fingerprint: Some(identity.device_fingerprint),
         },
     )
 }
@@ -327,6 +351,7 @@ async fn desktop_snapshot_for(
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     let config_path = data_dir.join("config").join("config.json");
+    let identity = load_or_create_device_identity(&data_dir)?;
     let config = read_stored_config(&config_path);
     let configured = config
         .as_ref()
@@ -391,6 +416,10 @@ async fn desktop_snapshot_for(
     });
     Ok(DesktopSnapshot {
         version: env!("CARGO_PKG_VERSION").into(),
+        device_nickname: identity.device_nickname,
+        device_fingerprint: identity.device_fingerprint,
+        platform: platform_name(),
+        last_checked_unix_seconds: unix_seconds(),
         configured,
         allowed_roots: config.map(|value| value.allowed_roots).unwrap_or_default(),
         runtime_phase,
@@ -531,6 +560,7 @@ async fn apply_for_access(app: AppHandle) -> Result<AccessStatus, String> {
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
+    let identity = load_or_create_device_identity(&data_dir)?;
     let config_dir = data_dir.join("config");
     fs::create_dir_all(&config_dir).map_err(|error| error.to_string())?;
     let application_path = config_dir.join("application.json");
@@ -548,7 +578,9 @@ async fn apply_for_access(app: AppHandle) -> Result<AccessStatus, String> {
     let request_body = serde_json::json!({
         "deviceId": application.device_id,
         "applicationToken": application.application_token,
-        "deviceName": device_name(),
+        "deviceName": identity.device_nickname,
+        "deviceNickname": identity.device_nickname,
+        "deviceFingerprint": identity.device_fingerprint,
         "platform": platform_name(),
     });
     let response: ApplicationApiStatus = control_request(
@@ -1776,6 +1808,12 @@ fn append_diagnostic_event(data_dir: &Path, event: DiagnosticEvent) -> Result<()
 }
 
 fn build_diagnostic_report(data_dir: &Path) -> DiagnosticReport {
+    let identity = load_or_create_device_identity(data_dir).unwrap_or_else(|_| DeviceIdentity {
+        device_nickname: "搭手·未命名-0000".into(),
+        device_fingerprint: "0000-0000".into(),
+    });
+    let application_id = read_application(&data_dir.join("config").join("application.json"))
+        .and_then(|application| application.application_id);
     let path = data_dir.join("logs").join("desktop-events.jsonl");
     let events = fs::read_to_string(path)
         .ok()
@@ -1794,6 +1832,10 @@ fn build_diagnostic_report(data_dir: &Path) -> DiagnosticReport {
         product: "Dashou Desktop",
         app_version: env!("CARGO_PKG_VERSION").into(),
         platform: platform_name(),
+        device_nickname: identity.device_nickname,
+        device_fingerprint: identity.device_fingerprint,
+        last_checked_unix_seconds: unix_seconds(),
+        application_id,
         events,
         privacy: "仅含状态、时间、版本、平台和错误类别；不含密码、Token、目录路径、文件内容或 ChatGPT 对话。",
     }
@@ -1831,6 +1873,8 @@ async fn sync_diagnostic_events(
             "errorCode": event.error_code,
             "appVersion": event.app_version,
             "unixSeconds": event.unix_seconds,
+            "deviceNickname": event.device_nickname,
+            "deviceFingerprint": event.device_fingerprint,
         })).collect::<Vec<_>>(),
     });
     let _: serde_json::Value = control_request(
@@ -1921,28 +1965,56 @@ fn normalize_control_url(value: &str) -> Result<String, String> {
     Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
-fn device_name() -> String {
-    #[cfg(target_os = "macos")]
-    if let Ok(output) = Command::new("scutil")
-        .args(["--get", "ComputerName"])
-        .output()
-    {
-        if output.status.success() {
-            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !name.is_empty() {
-                return name.chars().take(100).collect();
+const DEVICE_NICKNAMES: &[&str] = &[
+    "青柠", "云朵", "薄荷", "晚风", "月牙", "海盐", "松果", "晴天", "橘子", "栗子",
+    "星河", "小麦",
+];
+
+fn load_or_create_device_identity(data_dir: &Path) -> Result<DeviceIdentity, String> {
+    let path = data_dir.join("device.json");
+    if let Ok(text) = fs::read_to_string(&path) {
+        if let Ok(identity) = serde_json::from_str::<DeviceIdentity>(&text) {
+            if valid_device_identity(&identity) {
+                return Ok(identity);
             }
         }
     }
-    for key in ["COMPUTERNAME", "HOSTNAME"] {
-        if let Ok(name) = std::env::var(key) {
-            let name = name.trim();
-            if !name.is_empty() {
-                return name.chars().take(100).collect();
-            }
-        }
-    }
-    "我的电脑".into()
+
+    fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
+    let mut bytes = [0_u8; 6];
+    getrandom::fill(&mut bytes).map_err(|error| error.to_string())?;
+    let nickname = format!(
+        "搭手·{}-{:04}",
+        DEVICE_NICKNAMES[usize::from(bytes[0]) % DEVICE_NICKNAMES.len()],
+        1000 + (u16::from_be_bytes([bytes[1], bytes[2]]) % 9000)
+    );
+    let identity = DeviceIdentity {
+        device_nickname: nickname,
+        device_fingerprint: format!(
+            "{:02X}{:02X}-{:02X}{:02X}",
+            bytes[2], bytes[3], bytes[4], bytes[5]
+        ),
+    };
+    write_json_atomic(&path, &identity, true)?;
+    Ok(identity)
+}
+
+fn valid_device_identity(identity: &DeviceIdentity) -> bool {
+    identity.device_nickname.starts_with("搭手·")
+        && identity.device_nickname.len() <= 40
+        && identity
+            .device_nickname
+            .chars()
+            .all(|value| value.is_alphanumeric() || matches!(value, '搭' | '手' | '·' | '-'))
+        && identity.device_fingerprint.len() == 9
+        && identity
+            .device_fingerprint
+            .chars()
+            .enumerate()
+            .all(|(index, value)| {
+                (index == 4 && value == '-')
+                    || (index != 4 && value.is_ascii_hexdigit())
+            })
 }
 
 fn platform_name() -> String {
@@ -1994,13 +2066,34 @@ fn canonical_resource_path(path: PathBuf) -> Result<PathBuf, String> {
         // current directory on drive E and would otherwise hide the bug.
         return Err("[MISSING_RESOURCES]".into());
     }
-    let canonical = fs::canonicalize(path).map_err(|_| "[MISSING_RESOURCES]".to_string())?;
+    // Windows' `canonicalize` returns an extended-length path such as
+    // `\\\\?\\E:\\Dashou\\_up_\\vendor`. Rust can use that path, but Node
+    // 22 treats the entry-point argument as the drive-relative path `E:` and
+    // exits with `EISDIR: lstat 'E:'`. Keep canonicalization for resource
+    // validation, then pass the normal Windows spelling to child processes.
+    let canonical = normalize_windows_extended_path(
+        fs::canonicalize(path).map_err(|_| "[MISSING_RESOURCES]".to_string())?,
+    );
     if canonical.is_absolute() {
         Ok(canonical)
     } else {
         // A drive-relative Windows path such as `E:` is not a safe process
         // path. Reject it before it can reach CreateProcess or Node.
         Err("[MISSING_RESOURCES]".into())
+    }
+}
+
+fn normalize_windows_extended_path(path: PathBuf) -> PathBuf {
+    let Some(value) = path.to_str() else {
+        return path;
+    };
+
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = value.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path
     }
 }
 
@@ -2278,6 +2371,20 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_windows_extended_resource_paths_for_node() {
+        assert_eq!(
+            normalize_windows_extended_path(PathBuf::from(r"\\?\E:\Dashou\_up_\vendor")),
+            PathBuf::from(r"E:\Dashou\_up_\vendor")
+        );
+        assert_eq!(
+            normalize_windows_extended_path(PathBuf::from(r"\\?\UNC\server\share\vendor")),
+            PathBuf::from(r"\\server\share\vendor")
+        );
+        let ordinary = PathBuf::from(r"E:\Dashou\vendor");
+        assert_eq!(normalize_windows_extended_path(ordinary.clone()), ordinary);
+    }
+
+    #[test]
     fn locates_flat_resource_root() {
         let root = test_root("flat");
         make_resource_tree(&root);
@@ -2311,7 +2418,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.3-rc.8".into(),
+            version: "0.1.3-rc.9".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -2326,7 +2433,11 @@ mod tests {
     #[test]
     fn desktop_snapshot_does_not_serialize_secrets_or_file_contents() {
         let snapshot = DesktopSnapshot {
-            version: "0.1.3-rc.8".into(),
+            version: "0.1.3-rc.9".into(),
+            device_nickname: "搭手·青柠-4827".into(),
+            device_fingerprint: "7F3A-91C2".into(),
+            platform: "macos-aarch64".into(),
+            last_checked_unix_seconds: 1_786_838_400,
             configured: true,
             allowed_roots: vec!["/work/project".into()],
             runtime_phase: "ready".into(),
@@ -2344,6 +2455,21 @@ mod tests {
         assert!(!json.contains("password"));
         assert!(!json.contains("token"));
         assert!(!json.contains("fileContent"));
+    }
+
+    #[test]
+    fn device_identity_is_stable_and_contains_only_safe_support_metadata() {
+        let root = test_root("device-identity");
+        let first = load_or_create_device_identity(&root).expect("create device identity");
+        let second = load_or_create_device_identity(&root).expect("read device identity");
+        assert_eq!(first.device_nickname, second.device_nickname);
+        assert_eq!(first.device_fingerprint, second.device_fingerprint);
+        assert!(valid_device_identity(&first));
+        let json = serde_json::to_string(&first).expect("serialize device identity");
+        assert!(!json.contains("token"));
+        assert!(!json.contains("password"));
+        assert!(!json.contains("/"));
+        fs::remove_dir_all(root).expect("remove device identity test directory");
     }
 
     #[test]
@@ -2438,9 +2564,11 @@ mod tests {
                 unix_seconds: 1_786_838_400,
                 stage: "application_submit_failed".into(),
                 outcome: "error".into(),
-                app_version: "0.1.3-rc.8".into(),
+                app_version: "0.1.3-rc.9".into(),
                 error_code: Some("CONTROL_CONNECT".into()),
                 application_id: None,
+                device_nickname: Some("搭手·青柠-4827".into()),
+                device_fingerprint: Some("7F3A-91C2".into()),
             },
         )
         .expect("write diagnostic event");

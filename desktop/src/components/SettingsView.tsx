@@ -1,7 +1,10 @@
-import type { CopyCatalog, Preferences } from "../types";
+import type { AccessStatus, CopyCatalog, DesktopSnapshot, Preferences } from "../types";
+import { TroubleshootingCard } from "./TroubleshootingCard";
 
 type Props = {
   copy: CopyCatalog;
+  snapshot: DesktopSnapshot | null;
+  access: AccessStatus;
   version: string;
   preferences: Preferences;
   busy: string | null;
@@ -13,7 +16,7 @@ type Props = {
   onConfigureAgain: () => void;
 };
 
-export function SettingsView({ copy, version, preferences, busy, onPreference, onCheckUpdate, onCopyDiagnostics, onCopyAddress, onImportInvite, onConfigureAgain }: Props) {
+export function SettingsView({ copy, snapshot, access, version, preferences, busy, onPreference, onCheckUpdate, onCopyDiagnostics, onCopyAddress, onImportInvite, onConfigureAgain }: Props) {
   return (
     <div class="settings-page">
       <section class="settings-card">
@@ -34,6 +37,7 @@ export function SettingsView({ copy, version, preferences, busy, onPreference, o
           onChange={(value) => onPreference("notifyWhenReady", value)}
         />
       </section>
+      <TroubleshootingCard snapshot={snapshot} access={access} copy={copy} onCopy={onCopyDiagnostics} />
       <section class="settings-card compact-card">
         <div class="setting-line"><span>{copy.currentVersion}</span><code>{version}</code></div>
         <div class="settings-actions">

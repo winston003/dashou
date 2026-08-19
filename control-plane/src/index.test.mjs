@@ -84,7 +84,9 @@ test("device application can be approved, safely activated, confirmed and revoke
     body: {
       applicationToken,
       deviceId: `dev_${"b".repeat(24)}`,
-      deviceName: "Alice Mac",
+      deviceName: "搭手·青柠-4827",
+      deviceNickname: "搭手·青柠-4827",
+      deviceFingerprint: "7F3A-91C2",
       platform: "macos-arm64",
     },
   });
@@ -112,7 +114,9 @@ test("device application can be approved, safely activated, confirmed and revoke
   const list = await request("GET", "/admin/applications?status=pending", { env, token: ADMIN_TOKEN });
   const listed = await list.json();
   assert.equal(listed.applications.length, 1);
-  assert.equal(listed.applications[0].deviceName, "Alice Mac");
+  assert.equal(listed.applications[0].deviceName, "搭手·青柠-4827");
+  assert.equal(listed.applications[0].deviceNickname, "搭手·青柠-4827");
+  assert.equal(listed.applications[0].deviceFingerprint, "7F3A-91C2");
   assert.equal("applicationToken" in listed.applications[0], false);
 
   const approve = await request("POST", `/admin/applications/${created.applicationId}/approve`, {
@@ -243,7 +247,9 @@ test("client progress signals are authenticated, deduplicated and visible to the
     body: {
       applicationToken,
       deviceId: `dev_${"s".repeat(24)}`,
-      deviceName: "Signal PC",
+      deviceName: "搭手·薄荷-1304",
+      deviceNickname: "搭手·薄荷-1304",
+      deviceFingerprint: "1A2B-3C4D",
       platform: "windows-x64",
     },
   });
@@ -252,13 +258,13 @@ test("client progress signals are authenticated, deduplicated and visible to the
     eventId: "evt_abcdefghijklmnop",
     stage: "app_opened",
     outcome: "ok",
-  appVersion: "0.1.3-rc.8",
+    appVersion: "0.1.3-rc.9",
     unixSeconds: 1_786_838_400,
   }, {
     eventId: "evt_qrstuvwxyz12345",
     stage: "application_submitted",
     outcome: "ok",
-  appVersion: "0.1.3-rc.8",
+    appVersion: "0.1.3-rc.9",
     unixSeconds: 1_786_838_401,
   }];
   assert.equal((await request("POST", `/applications/${created.applicationId}/events`, { env, body: { events } })).status, 401);
@@ -277,6 +283,8 @@ test("client progress signals are authenticated, deduplicated and visible to the
   const payload = await detail.json();
   assert.equal(payload.events.length, 2);
   assert.equal(payload.events[0].stage, "app_opened");
+  assert.equal(payload.events[0].deviceNickname, "搭手·薄荷-1304");
+  assert.equal(payload.events[0].deviceFingerprint, "1A2B-3C4D");
   assert.equal(JSON.stringify(payload).includes(applicationToken), false);
 });
 
@@ -370,7 +378,7 @@ test("Worker health exposes the deployment build SHA", async () => {
   assert.deepEqual(await response.json(), {
     ok: true,
     name: "dashou-pilot-control",
-  version: "0.1.3-rc.8",
+    version: "0.1.3-rc.9",
     buildSha: "abc123",
   });
 });
@@ -531,7 +539,7 @@ class FakeStatement {
       return result(1);
     }
     if (this.sql.startsWith("INSERT OR IGNORE INTO pilot_client_events")) {
-      const [applicationId, eventId, stage, outcome, errorCode, appVersion, clientUnixSeconds, receivedAt] = this.values;
+      const [applicationId, eventId, stage, outcome, errorCode, appVersion, clientUnixSeconds, receivedAt, deviceNickname, deviceFingerprint] = this.values;
       const key = `${applicationId}.${eventId}`;
       if (this.db.events.has(key)) return result(0);
       this.db.events.set(key, {
@@ -543,16 +551,20 @@ class FakeStatement {
         app_version: appVersion,
         client_unix_seconds: clientUnixSeconds,
         received_at: receivedAt,
+        device_nickname: deviceNickname,
+        device_fingerprint: deviceFingerprint,
       });
       return result(1);
     }
     if (this.sql.startsWith("INSERT INTO pilot_applications")) {
-      const [applicationId, applicationTokenHash, deviceId, deviceName, platform, contact, createdAt] = this.values;
+      const [applicationId, applicationTokenHash, deviceId, deviceName, deviceNickname, deviceFingerprint, platform, contact, createdAt] = this.values;
       this.db.applications.set(applicationId, {
         application_id: applicationId,
         application_token_hash: applicationTokenHash,
         device_id: deviceId,
         device_name: deviceName,
+        device_nickname: deviceNickname,
+        device_fingerprint: deviceFingerprint,
         platform,
         contact,
         status: "pending",

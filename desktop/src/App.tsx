@@ -3,9 +3,11 @@ import { defaultCopy, mergeCopy } from "./copy";
 import { setAutostart, tauriBridge, normalizeBridgeError, type Bridge } from "./bridge";
 import { reducer, initialState, phaseLabel, accessIsReady, accessIsWaiting, shouldPollAccess, canCopyPassword } from "./state";
 import type { AccessStatus, CopyCatalog, DesktopSnapshot, Preferences, RuntimePhase } from "./types";
+import { applicationStatusLabel, troubleshootingStatus, troubleshootingStep, troubleshootingStepLabel } from "./diagnostics";
 import { FolderPicker } from "./components/FolderPicker";
 import { ProgressSteps } from "./components/ProgressSteps";
 import { SettingsView } from "./components/SettingsView";
+import { TroubleshootingCard } from "./components/TroubleshootingCard";
 import "./styles.css";
 import handMark from "./assets/hand-mark.svg";
 import mascot from "./assets/mascot.png";
@@ -248,7 +250,19 @@ export function App({ bridge = tauriBridge }: Props) {
   }
 
   async function diagnostics() {
-    try { await bridge.copy(JSON.stringify(await bridge.diagnosticReport(), null, 2)); toast(copy.diagnosticsCopied); }
+    try {
+      const report = await bridge.diagnosticReport() as Record<string, unknown>;
+      const step = troubleshootingStep(state.access, snapshot);
+      await bridge.copy(JSON.stringify({
+        ...report,
+        currentStatus: troubleshootingStatus(state.access, snapshot, copy),
+        currentStep: troubleshootingStepLabel(step, copy),
+        applicationStatus: applicationStatusLabel(state.access.status, copy),
+        timeline: Array.isArray(report.events) ? report.events : [],
+      }, null, 2));
+      void bridge.recordEvent("diagnostics_copied");
+      toast(copy.diagnosticsCopied);
+    }
     catch { toast(copy.diagnosticsFailure); }
   }
 
@@ -274,7 +288,7 @@ export function App({ bridge = tauriBridge }: Props) {
       </header>
 
       {state.tab === "settings" ? (
-        <SettingsView copy={copy} version={snapshot?.version ?? "0.1.3-rc.8"} preferences={state.preferences} busy={state.busy} onPreference={preference} onCheckUpdate={checkUpdate} onCopyDiagnostics={diagnostics} onCopyAddress={copyAddress} onImportInvite={importInvite} onConfigureAgain={() => dispatch({ type: "tab", tab: "use" })} />
+        <SettingsView copy={copy} snapshot={snapshot} access={state.access} version={snapshot?.version ?? "0.1.3-rc.9"} preferences={state.preferences} busy={state.busy} onPreference={preference} onCheckUpdate={checkUpdate} onCopyDiagnostics={diagnostics} onCopyAddress={copyAddress} onImportInvite={importInvite} onConfigureAgain={() => dispatch({ type: "tab", tab: "use" })} />
       ) : (
         <div class="use-page">
           {showSetup ? (
@@ -287,6 +301,7 @@ export function App({ bridge = tauriBridge }: Props) {
               {!accessReady ? <div class="hero-side"><img class="mascot" src={mascot} alt="" aria-hidden="true" /><button class="button button-primary hero-button" type="button" disabled={state.busy === "access" || isWaiting} onClick={applyAccess}>{state.busy === "access" ? copy.submitting : copy.startSetup}</button></div> : null}
               {!accessReady && state.access.status === "rejected" ? <p class="inline-error">{state.access.reason || copy.failureBody}</p> : null}
               <ProgressSteps access={state.access} copy={copy} />
+              <TroubleshootingCard snapshot={snapshot} access={state.access} copy={copy} onCopy={diagnostics} />
               {accessReady ? <FolderPicker roots={state.selectedRoots} copy={copy} disabled={state.busy !== null} onAdd={addFolders} onRemove={removeFolder} /> : null}
               {accessReady ? <button class="button button-primary full-button" type="button" disabled={!state.selectedRoots.length || state.busy !== null} onClick={saveFolders}>{state.busy === "folders" ? copy.savingFolders : copy.startUsing}</button> : null}
               <div class="trust-panel"><strong>{copy.trustTitle}</strong><p>{copy.trustBody}</p></div>
@@ -302,6 +317,7 @@ export function App({ bridge = tauriBridge }: Props) {
                 </div>
                 {runtimePhase === "blocked" || runtimePhase === "stopped" ? <div class="recover-panel"><strong>{runtimePhase === "blocked" ? copy.failureTitle : copy.stopped}</strong><p>{runtimePhase === "blocked" ? copy.failureBody : copy.workingHint}</p><button class="button button-primary" type="button" disabled={state.busy === "restart"} onClick={restart}>{copy.retry}</button></div> : null}
                 <FolderPicker roots={state.selectedRoots} copy={copy} disabled={state.busy !== null} onAdd={addFolders} onRemove={removeFolder} />
+                <TroubleshootingCard snapshot={snapshot} access={state.access} copy={copy} onCopy={diagnostics} />
                 <div class="help-row"><button class="text-button" type="button" aria-expanded={state.helpOpen} onClick={() => dispatch({ type: "help", value: !state.helpOpen })}>{copy.helpTitle} <span aria-hidden="true">{state.helpOpen ? "↑" : "↓"}</span></button>{state.helpOpen ? <div class="help-popover"><p>{copy.helpBody}</p><p>{copy.helpPath}</p></div> : null}</div>
               </section>
               <p class="resident-note">{copy.residentNote}</p>
