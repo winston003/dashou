@@ -1,6 +1,6 @@
 [package]
 name = "dashou-desktop"
-version = "0.1.3-rc.9"
+version = "0.1.3-rc.10"
 description = "搭手 Dashou desktop launcher"
 authors = ["Warmbyte"]
 edition = "2021"

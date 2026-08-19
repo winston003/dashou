@@ -33,6 +33,8 @@ struct RuntimeMeta {
     error: Option<UiError>,
     desired_running: bool,
     supervisor_started: bool,
+    started_at: Option<Instant>,
+    local_health_observed: bool,
 }
 
 struct DaemonRuntime {
@@ -51,6 +53,7 @@ struct RuntimeResources {
 }
 
 const PUBLIC_HEALTH_FAILURE_LIMIT: u8 = 3;
+const LOCAL_HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -263,8 +266,21 @@ struct DiagnosticReport {
     last_checked_unix_seconds: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     application_id: Option<String>,
+    application_record_present: bool,
+    runtime: DiagnosticRuntime,
     events: Vec<DiagnosticEvent>,
     privacy: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticRuntime {
+    configured: bool,
+    runtime_phase: String,
+    local_health: bool,
+    public_health: bool,
+    recovery_attempts: u8,
+    error_code: Option<String>,
 }
 
 const DIAGNOSTIC_STAGES: &[&str] = &[
@@ -326,12 +342,26 @@ fn record_client_event(
 }
 
 #[tauri::command]
-fn diagnostic_report(app: AppHandle) -> Result<DiagnosticReport, String> {
+async fn diagnostic_report(
+    app: AppHandle,
+    state: State<'_, DaemonState>,
+) -> Result<DiagnosticReport, String> {
     let data_dir = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
-    Ok(build_diagnostic_report(&data_dir))
+    let snapshot = desktop_snapshot_for(&app, state.inner()).await?;
+    Ok(build_diagnostic_report_with_runtime(
+        &data_dir,
+        DiagnosticRuntime {
+            configured: snapshot.configured,
+            runtime_phase: snapshot.runtime_phase,
+            local_health: snapshot.local_health,
+            public_health: snapshot.public_health,
+            recovery_attempts: snapshot.recovery_attempts,
+            error_code: snapshot.error.map(|error| error.code),
+        },
+    ))
 }
 
 #[tauri::command]
@@ -340,6 +370,11 @@ async fn desktop_snapshot(
     state: State<'_, DaemonState>,
 ) -> Result<DesktopSnapshot, String> {
     desktop_snapshot_for(&app, &state).await
+}
+
+#[tauri::command]
+fn reset_access_state(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), String> {
+    reset_access_state_inner(&app, state.inner())
 }
 
 async fn desktop_snapshot_for(
@@ -375,7 +410,10 @@ async fn desktop_snapshot_for(
     };
     let running =
         daemon_is_running_state(state) || external_daemon_is_running(&data_dir.join("state"));
-    let public_url = config.as_ref().map(|value| value.public_base_url.clone());
+    let public_url = config
+        .as_ref()
+        .map(|value| value.public_base_url.clone())
+        .filter(|value| !value.trim().is_empty());
     let port = config.as_ref().map(|value| value.port).unwrap_or(7677);
     let local_health = if running {
         probe_health(&format!("http://127.0.0.1:{port}/healthz")).await
@@ -597,7 +635,10 @@ async fn apply_for_access(app: AppHandle) -> Result<AccessStatus, String> {
 }
 
 #[tauri::command]
-async fn application_status(app: AppHandle) -> Result<AccessStatus, String> {
+async fn application_status(
+    app: AppHandle,
+    state: State<'_, DaemonState>,
+) -> Result<AccessStatus, String> {
     apply_system_proxy_environment();
     let data_dir = app
         .path()
@@ -621,13 +662,29 @@ async fn application_status(app: AppHandle) -> Result<AccessStatus, String> {
         .as_deref()
         .ok_or_else(|| "申请尚未成功提交，请重新点击申请".to_string())?;
     let base_url = normalize_control_base_url(&application.control_base_url)?;
-    let mut response: ApplicationApiStatus = control_request(
+    let mut response: ApplicationApiStatus = match control_request(
         reqwest::Method::GET,
         &format!("{base_url}/applications/{application_id}"),
         Some(&application.application_token),
         None,
     )
-    .await?;
+    .await
+    {
+        Ok(response) => response,
+        Err(error) if is_stale_application_error(&error) => {
+            reset_access_state_inner(&app, state.inner())?;
+            return Ok(AccessStatus {
+                status: "not_applied".into(),
+                application_id: None,
+                created_at: None,
+                period: None,
+                expires_at: None,
+                mcp_url: None,
+                reason: Some("之前的连接已失效，请重新申请".into()),
+            });
+        }
+        Err(error) => return Err(error),
+    };
     let _ = sync_diagnostic_events(&data_dir, &application).await;
     if response.status == "approved" {
         let activation: ActivationResponse = control_request(
@@ -943,6 +1000,8 @@ fn start_daemon_inner(app: &AppHandle, state: &DaemonState) -> Result<(), String
                     guard.meta.recovery_attempts = 0;
                     guard.meta.public_health_failures = 0;
                     guard.meta.error = None;
+                    guard.meta.started_at = Some(Instant::now());
+                    guard.meta.local_health_observed = false;
                 }
                 spawn_supervisor(app.clone());
                 return Ok(());
@@ -964,6 +1023,8 @@ fn start_daemon_inner(app: &AppHandle, state: &DaemonState) -> Result<(), String
                             diagnostic_id: Some(format!("runtime-{}", unix_seconds())),
                         });
                         guard.meta.desired_running = false;
+                        guard.meta.started_at = None;
+                        guard.meta.local_health_observed = false;
                     }
                     return Err(last_error);
                 }
@@ -976,6 +1037,8 @@ fn start_daemon_inner(app: &AppHandle, state: &DaemonState) -> Result<(), String
                             diagnostic_id: Some(format!("runtime-{}", unix_seconds())),
                         });
                         guard.meta.desired_running = false;
+                        guard.meta.started_at = None;
+                        guard.meta.local_health_observed = false;
                     }
                     return Err(last_error);
                 }
@@ -1005,31 +1068,81 @@ fn spawn_supervisor(app: AppHandle) {
         let Some(state) = app.try_state::<DaemonState>() else {
             break;
         };
-        let should_restart = {
+        let mut should_restart = false;
+        let mut health_probe_port = None;
+        {
             match state.0.lock() {
                 Ok(mut guard) => {
                     if !guard.meta.desired_running {
-                        false
+                        should_restart = false;
                     } else if let Some(child) = guard.child.as_mut() {
                         match child.try_wait() {
-                            Ok(None) => false,
+                            Ok(None) => {
+                                if !guard.meta.local_health_observed
+                                    && guard
+                                        .meta
+                                        .started_at
+                                        .is_some_and(|started| started.elapsed() >= LOCAL_HEALTH_TIMEOUT)
+                                {
+                                    health_probe_port = Some(
+                                        app.path()
+                                            .app_data_dir()
+                                            .ok()
+                                            .and_then(|path| read_port(&path.join("config").join("config.json")))
+                                            .unwrap_or(7677),
+                                    );
+                                }
+                            }
                             Ok(Some(_)) | Err(_) => {
                                 guard.child = None;
                                 guard.meta.phase = "recovering".into();
                                 guard.meta.recovery_attempts = 0;
                                 guard.meta.error = None;
-                                true
+                                guard.meta.started_at = None;
+                                guard.meta.local_health_observed = false;
+                                should_restart = true;
                             }
                         }
                     } else {
                         let data_dir = app.path().app_data_dir().ok();
-                        !data_dir
+                        should_restart = !data_dir
                             .is_some_and(|path| external_daemon_is_running(&path.join("state")))
                     }
                 }
-                Err(_) => false,
+                Err(_) => {}
             }
-        };
+        }
+        if let Some(port) = health_probe_port {
+            let local_health = tauri::async_runtime::block_on(probe_health(
+                &format!("http://127.0.0.1:{port}/healthz"),
+            ));
+            if let Ok(mut guard) = state.0.lock() {
+                if local_health {
+                    guard.meta.local_health_observed = true;
+                    guard.meta.started_at = None;
+                } else if guard.meta.desired_running
+                    && !guard.meta.local_health_observed
+                    && guard
+                        .meta
+                        .started_at
+                        .is_some_and(|started| started.elapsed() >= LOCAL_HEALTH_TIMEOUT)
+                {
+                    if let Some(mut child) = guard.child.take() {
+                        let _ = terminate_child_process(&mut child);
+                        let _ = child.wait();
+                    }
+                    guard.meta.phase = "blocked".into();
+                    guard.meta.error = Some(UiError {
+                        code: "RUNTIME_HEALTH_TIMEOUT".into(),
+                        retryable: true,
+                        diagnostic_id: Some(format!("runtime-{}", unix_seconds())),
+                    });
+                    guard.meta.desired_running = false;
+                    guard.meta.started_at = None;
+                    guard.meta.local_health_observed = false;
+                }
+            }
+        }
         if should_restart {
             let _ = start_daemon_inner(&app, &state);
         }
@@ -1086,49 +1199,64 @@ fn daemon_is_running_state(state: &DaemonState) -> bool {
 }
 
 fn stop_child(state: &State<'_, DaemonState>) -> Result<(), String> {
+    stop_child_inner(state.inner())
+}
+
+fn stop_child_inner(state: &DaemonState) -> Result<(), String> {
     let mut guard = state.0.lock().map_err(|_| "后台服务状态锁已损坏")?;
     if let Some(mut child) = guard.child.take() {
-        let pid = child.id();
-        #[cfg(unix)]
-        {
-            // The child is the leader of its own process group. Shut down the
-            // group gracefully first, then force-kill only that group if a
-            // descendant does not exit promptly.
-            unsafe {
-                libc::kill(-(pid as libc::pid_t), libc::SIGTERM);
-            }
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while Instant::now() < deadline {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) => thread::sleep(Duration::from_millis(50)),
-                    Err(_) => break,
-                }
-            }
-            if child.try_wait().ok().flatten().is_none() {
-                unsafe {
-                    libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-                }
-            }
-        }
-        #[cfg(windows)]
-        {
-            // Child::kill() does not include descendants on Windows. taskkill
-            // tree mode is the smallest reliable equivalent for this bundle.
-            let mut taskkill = Command::new("taskkill");
-            hide_windows_console(&mut taskkill);
-            let _ = taskkill
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
+        terminate_child_process(&mut child)?;
         let _ = child.wait();
     }
     guard.meta.phase = "stopped".into();
     guard.meta.recovery_attempts = 0;
     guard.meta.error = None;
     guard.meta.desired_running = false;
+    guard.meta.started_at = None;
+    guard.meta.local_health_observed = false;
+    Ok(())
+}
+
+fn terminate_child_process(child: &mut Child) -> Result<(), String> {
+    let pid = child.id();
+    #[cfg(unix)]
+    {
+        // The child is the leader of its own process group. Shut down the
+        // group gracefully first, then force-kill only that group if a
+        // descendant does not exit promptly.
+        unsafe {
+            libc::kill(-(pid as libc::pid_t), libc::SIGTERM);
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => thread::sleep(Duration::from_millis(50)),
+                Err(_) => break,
+            }
+        }
+        if child.try_wait().ok().flatten().is_none() {
+            unsafe {
+                libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Child::kill() does not include descendants on Windows. taskkill
+        // tree mode is the smallest reliable equivalent for this bundle.
+        let mut taskkill = Command::new("taskkill");
+        hide_windows_console(&mut taskkill);
+        let status = taskkill
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|_| "无法停止搭手运行时".to_string())?;
+        if !status.success() && process_is_alive(pid) {
+            return Err("无法停止搭手运行时".into());
+        }
+    }
     Ok(())
 }
 
@@ -1617,7 +1745,8 @@ fn configuration_is_ready(config_path: &Path, auth_path: &Path) -> bool {
     let Some(config_dir) = config_path.parent() else {
         return false;
     };
-    !config.allowed_roots.is_empty()
+    !config.public_base_url.trim().is_empty()
+        && !config.allowed_roots.is_empty()
         && auth_path.is_file()
         && read_owner_token(config_dir).is_some()
         && read_pilot_token(config_dir).is_some()
@@ -1690,6 +1819,48 @@ fn clear_application_record(config_dir: &Path) -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("无法完成邀请切换：{error}")),
+    }
+}
+
+fn is_stale_application_error(error: &str) -> bool {
+    matches!(
+        error.split_whitespace().next(),
+        Some("[CONTROL_HTTP_401]") | Some("[CONTROL_HTTP_404]")
+    )
+}
+
+fn reset_access_state_inner(app: &AppHandle, state: &DaemonState) -> Result<(), String> {
+    stop_child_inner(state)?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let config_dir = data_dir.join("config");
+
+    // Keep the user's selected folders and port, but remove the credentials
+    // and public address that belong to the invalid application. The next
+    // application starts from a fresh idempotency credential without making
+    // the user choose their folders again.
+    clear_access_files(&config_dir)
+}
+
+fn clear_access_files(config_dir: &Path) -> Result<(), String> {
+    let config_path = config_dir.join("config.json");
+    if let Some(config) = read_stored_config(&config_path) {
+        write_json_atomic(
+            &config_path,
+            &StoredConfig {
+                public_base_url: String::new(),
+                ..config
+            },
+            false,
+        )?;
+    }
+    clear_application_record(config_dir)?;
+    match fs::remove_file(config_dir.join("auth.json")) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("无法清除失效连接：{error}")),
     }
 }
 
@@ -1807,13 +1978,33 @@ fn append_diagnostic_event(data_dir: &Path, event: DiagnosticEvent) -> Result<()
     file.write_all(b"\n").map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 fn build_diagnostic_report(data_dir: &Path) -> DiagnosticReport {
+    let config_path = data_dir.join("config").join("config.json");
+    let auth_path = data_dir.join("config").join("auth.json");
+    build_diagnostic_report_with_runtime(
+        data_dir,
+        DiagnosticRuntime {
+            configured: configuration_is_ready(&config_path, &auth_path),
+            runtime_phase: "unknown".into(),
+            local_health: false,
+            public_health: false,
+            recovery_attempts: 0,
+            error_code: None,
+        },
+    )
+}
+
+fn build_diagnostic_report_with_runtime(
+    data_dir: &Path,
+    runtime: DiagnosticRuntime,
+) -> DiagnosticReport {
     let identity = load_or_create_device_identity(data_dir).unwrap_or_else(|_| DeviceIdentity {
         device_nickname: "搭手·未命名-0000".into(),
         device_fingerprint: "0000-0000".into(),
     });
-    let application_id = read_application(&data_dir.join("config").join("application.json"))
-        .and_then(|application| application.application_id);
+    let application = read_application(&data_dir.join("config").join("application.json"));
+    let application_id = application.as_ref().and_then(|value| value.application_id.clone());
     let path = data_dir.join("logs").join("desktop-events.jsonl");
     let events = fs::read_to_string(path)
         .ok()
@@ -1836,6 +2027,8 @@ fn build_diagnostic_report(data_dir: &Path) -> DiagnosticReport {
         device_fingerprint: identity.device_fingerprint,
         last_checked_unix_seconds: unix_seconds(),
         application_id,
+        application_record_present: application.is_some(),
+        runtime,
         events,
         privacy: "仅含状态、时间、版本、平台和错误类别；不含密码、Token、目录路径、文件内容或 ChatGPT 对话。",
     }
@@ -2264,6 +2457,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             status,
             desktop_snapshot,
+            reset_access_state,
             update_allowed_roots,
             set_preferences,
             restart_runtime,
@@ -2418,7 +2612,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.3-rc.9".into(),
+            version: "0.1.3-rc.10".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -2433,7 +2627,7 @@ mod tests {
     #[test]
     fn desktop_snapshot_does_not_serialize_secrets_or_file_contents() {
         let snapshot = DesktopSnapshot {
-            version: "0.1.3-rc.9".into(),
+            version: "0.1.3-rc.10".into(),
             device_nickname: "搭手·青柠-4827".into(),
             device_fingerprint: "7F3A-91C2".into(),
             platform: "macos-aarch64".into(),
@@ -2564,7 +2758,7 @@ mod tests {
                 unix_seconds: 1_786_838_400,
                 stage: "application_submit_failed".into(),
                 outcome: "error".into(),
-                app_version: "0.1.3-rc.9".into(),
+                app_version: "0.1.3-rc.10".into(),
                 error_code: Some("CONTROL_CONNECT".into()),
                 application_id: None,
                 device_nickname: Some("搭手·青柠-4827".into()),
@@ -2674,6 +2868,51 @@ mod tests {
         clear_application_record(&root).expect("missing application record is already clear");
 
         fs::remove_dir_all(root).expect("remove fallback invite test directory");
+    }
+
+    #[test]
+    fn stale_application_errors_are_reset_only_for_unauthorized_or_missing_records() {
+        assert!(is_stale_application_error(
+            "[CONTROL_HTTP_401] 搭手服务返回 401：未授权"
+        ));
+        assert!(is_stale_application_error(
+            "[CONTROL_HTTP_404] 搭手服务返回 404：申请不存在"
+        ));
+        assert!(!is_stale_application_error(
+            "[CONTROL_TIMEOUT] 联系搭手服务超时，请检查网络后重试"
+        ));
+        assert!(!is_stale_application_error(
+            "[CONTROL_HTTP_500] 搭手服务暂时不可用"
+        ));
+    }
+
+    #[test]
+    fn clearing_access_keeps_selected_roots_and_port() {
+        let root = test_root("clear-access");
+        fs::create_dir_all(&root).expect("create clear access directory");
+        write_json_atomic(
+            &root.join("config.json"),
+            &StoredConfig {
+                host: "127.0.0.1".into(),
+                port: 7788,
+                allowed_roots: vec!["/tmp/keep-me".into()],
+                public_base_url: "https://old.example".into(),
+            },
+            false,
+        )
+        .expect("write stale config");
+        fs::write(root.join("auth.json"), b"secret").expect("write stale auth");
+        fs::write(root.join("application.json"), b"stale").expect("write stale application");
+
+        clear_access_files(&root).expect("clear access state");
+
+        let config = read_stored_config(&root.join("config.json")).expect("read preserved config");
+        assert_eq!(config.port, 7788);
+        assert_eq!(config.allowed_roots, vec!["/tmp/keep-me"]);
+        assert!(config.public_base_url.is_empty());
+        assert!(!root.join("auth.json").exists());
+        assert!(!root.join("application.json").exists());
+        fs::remove_dir_all(root).expect("remove clear access directory");
     }
 
     #[test]

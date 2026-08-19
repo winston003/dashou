@@ -70,6 +70,14 @@ export function App({ bridge = tauriBridge }: Props) {
             const access = await bridge.applicationStatus();
             accessRef.current = access;
             dispatch({ type: "access", access });
+            if (access.status === "not_applied" && access.reason) {
+              activationRecorded.current = false;
+              connectionReadyRecorded.current = false;
+              previousPhase.current = null;
+              toast(access.reason);
+              void bridge.recordEvent("application_status_failed", "error", "APPLICATION_RESET_REQUIRED");
+              void bridge.snapshot().then((refreshed) => dispatch({ type: "snapshot", snapshot: refreshed, syncRoots: true })).catch(() => undefined);
+            }
             if (["approved", "active", "activated"].includes(access.status) && !activationRecorded.current) {
               activationRecorded.current = true;
               void bridge.recordEvent("activation_completed", "ok", undefined, access.applicationId);
@@ -91,7 +99,7 @@ export function App({ bridge = tauriBridge }: Props) {
     });
     loadInFlight.current = task;
     return task;
-  }, [bridge]);
+  }, [bridge, toast]);
 
   useEffect(() => {
     void load(true, true);
@@ -288,7 +296,7 @@ export function App({ bridge = tauriBridge }: Props) {
       </header>
 
       {state.tab === "settings" ? (
-        <SettingsView copy={copy} snapshot={snapshot} access={state.access} version={snapshot?.version ?? "0.1.3-rc.9"} preferences={state.preferences} busy={state.busy} onPreference={preference} onCheckUpdate={checkUpdate} onCopyDiagnostics={diagnostics} onCopyAddress={copyAddress} onImportInvite={importInvite} onConfigureAgain={() => dispatch({ type: "tab", tab: "use" })} />
+        <SettingsView copy={copy} snapshot={snapshot} access={state.access} version={snapshot?.version ?? "0.1.3-rc.10"} preferences={state.preferences} busy={state.busy} onPreference={preference} onCheckUpdate={checkUpdate} onCopyDiagnostics={diagnostics} onCopyAddress={copyAddress} onImportInvite={importInvite} onConfigureAgain={() => dispatch({ type: "tab", tab: "use" })} />
       ) : (
         <div class="use-page">
           {showSetup ? (
@@ -299,7 +307,7 @@ export function App({ bridge = tauriBridge }: Props) {
                 <p class="lede">{accessReady ? copy.readyBody : copy.setupIntro}</p>
               </div>
               {!accessReady ? <div class="hero-side"><img class="mascot" src={mascot} alt="" aria-hidden="true" /><button class="button button-primary hero-button" type="button" disabled={state.busy === "access" || isWaiting} onClick={applyAccess}>{state.busy === "access" ? copy.submitting : copy.startSetup}</button></div> : null}
-              {!accessReady && state.access.status === "rejected" ? <p class="inline-error">{state.access.reason || copy.failureBody}</p> : null}
+              {!accessReady && (state.access.reason || state.access.status === "rejected") ? <p class="inline-error">{state.access.reason || copy.failureBody}</p> : null}
               <ProgressSteps access={state.access} copy={copy} />
               <TroubleshootingCard snapshot={snapshot} access={state.access} copy={copy} onCopy={diagnostics} />
               {accessReady ? <FolderPicker roots={state.selectedRoots} copy={copy} disabled={state.busy !== null} onAdd={addFolders} onRemove={removeFolder} /> : null}
@@ -315,7 +323,7 @@ export function App({ bridge = tauriBridge }: Props) {
                   <button class="button button-primary" type="button" disabled={runtimePhase !== "ready"} onClick={openChatGPT}>{copy.openChatGPT}</button>
                   <button class="button button-secondary" type="button" disabled={!passwordAvailable} onClick={copyPassword}>{copy.copyPassword}</button>
                 </div>
-                {runtimePhase === "blocked" || runtimePhase === "stopped" ? <div class="recover-panel"><strong>{runtimePhase === "blocked" ? copy.failureTitle : copy.stopped}</strong><p>{runtimePhase === "blocked" ? copy.failureBody : copy.workingHint}</p><button class="button button-primary" type="button" disabled={state.busy === "restart"} onClick={restart}>{copy.retry}</button></div> : null}
+                {runtimePhase === "blocked" || runtimePhase === "stopped" ? <div class="recover-panel"><strong>{runtimePhase === "blocked" ? copy.failureTitle : copy.stopped}</strong><p>{runtimePhase === "blocked" && snapshot?.error ? friendlyError({ code: snapshot.error.code }, copy.failureBody, copy) : runtimePhase === "blocked" ? copy.failureBody : copy.workingHint}</p><button class="button button-primary" type="button" disabled={state.busy === "restart"} onClick={restart}>{copy.retry}</button></div> : null}
                 <FolderPicker roots={state.selectedRoots} copy={copy} disabled={state.busy !== null} onAdd={addFolders} onRemove={removeFolder} />
                 <TroubleshootingCard snapshot={snapshot} access={state.access} copy={copy} onCopy={diagnostics} />
                 <div class="help-row"><button class="text-button" type="button" aria-expanded={state.helpOpen} onClick={() => dispatch({ type: "help", value: !state.helpOpen })}>{copy.helpTitle} <span aria-hidden="true">{state.helpOpen ? "↑" : "↓"}</span></button>{state.helpOpen ? <div class="help-popover"><p>{copy.helpBody}</p><p>{copy.helpPath}</p></div> : null}</div>
@@ -342,6 +350,7 @@ const errorCopy: Record<string, keyof CopyCatalog> = {
   CONTROL_CONNECT: "errorControlConnect",
   CONTROL_RESPONSE_INVALID: "errorControlResponse",
   RUNTIME_START_FAILED: "errorRuntimeStart",
+  RUNTIME_HEALTH_TIMEOUT: "errorRuntimeHealthTimeout",
   RUNTIME_LOG_UNAVAILABLE: "errorRuntimeStart",
   ROOTS_UPDATE_ROLLBACK: "foldersSaveFailure",
   NOT_CONFIGURED: "errorNotConfigured",
