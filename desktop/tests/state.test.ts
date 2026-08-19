@@ -7,7 +7,7 @@ test("snapshot hydrates roots and preferences without secrets", () => {
   const next = reducer(initialState, {
     type: "snapshot",
     snapshot: {
-      version: "0.1.3-rc.7",
+      version: "0.1.3-rc.8",
       configured: true,
       allowedRoots: ["/work/one", "/work/two"],
       runtimePhase: "ready",
@@ -38,7 +38,7 @@ test("background snapshots do not overwrite folders being edited", () => {
   const hydrated = reducer(initialState, {
     type: "snapshot",
     snapshot: {
-      version: "0.1.3-rc.7",
+      version: "0.1.3-rc.8",
       configured: true,
       allowedRoots: ["/work/one"],
       runtimePhase: "ready",
@@ -112,7 +112,7 @@ test("a healthy snapshot clears a stale restart error", () => {
   const healthy = reducer(withError, {
     type: "snapshot",
     snapshot: {
-      version: "0.1.3-rc.7",
+      version: "0.1.3-rc.8",
       configured: true,
       allowedRoots: ["/work/one"],
       runtimePhase: "ready",

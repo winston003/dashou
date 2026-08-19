@@ -42,6 +42,14 @@ struct DaemonRuntime {
 
 struct DaemonState(Mutex<DaemonRuntime>);
 
+struct RuntimeResources {
+    root: PathBuf,
+    node: PathBuf,
+    cli: PathBuf,
+    cloudflared: PathBuf,
+    runtime_dir: PathBuf,
+}
+
 const PUBLIC_HEALTH_FAILURE_LIMIT: u8 = 3;
 
 #[cfg(windows)]
@@ -780,20 +788,8 @@ fn start_daemon_once(app: &AppHandle, state: &DaemonState) -> Result<(), String>
     // resources on some targets. Resolve both the intended flat layout and
     // the layout produced by the bundler so an installed app can start with
     // the exact resources that were packaged into it.
-    let resource_root = locate_resource_root(&resource_dir);
-    let node = resource_root.join("node-runtime").join(node_name());
-    let cli = resource_root
-        .join("dashou-runtime")
-        .join("dist")
-        .join("dashou-cli.js");
-    let cloudflared = resource_root.join("cloudflared").join(cloudflared_name());
-    for required in [&node, &cli, &cloudflared] {
-        if !required.exists() {
-            return Err("[MISSING_RESOURCES]".into());
-        }
-    }
-    let runtime_dir = resource_root.join("dashou-runtime");
-    let runtime_bin = node.parent().unwrap_or(Path::new(""));
+    let resources = resolve_runtime_resources(&resource_dir)?;
+    let runtime_bin = resources.node.parent().unwrap_or(Path::new(""));
     let path = format!(
         "{}{}{}",
         runtime_bin.display(),
@@ -809,7 +805,7 @@ fn start_daemon_once(app: &AppHandle, state: &DaemonState) -> Result<(), String>
     if let Some(parent) = log_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let log_file = fs::OpenOptions::new()
+    let mut log_file = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)
@@ -818,21 +814,34 @@ fn start_daemon_once(app: &AppHandle, state: &DaemonState) -> Result<(), String>
     let log_file_for_stdout = log_file
         .try_clone()
         .map_err(|_| "[RUNTIME_LOG_UNAVAILABLE]".to_string())?;
-    let mut command = Command::new(node);
+    // Pass canonical absolute paths to Windows. In particular, do not let a
+    // drive-relative path such as `E:` reach Node as its entry point. Node
+    // treats that value as a directory and exits with EISDIR before the Dashou
+    // runtime can write a useful application error.
+    let _ = writeln!(
+        &mut log_file,
+        "runtime_paths root={} node={} cli={} runtime_dir={} cloudflared={}",
+        resources.root.display(),
+        resources.node.display(),
+        resources.cli.display(),
+        resources.runtime_dir.display(),
+        resources.cloudflared.display()
+    );
+    let mut command = Command::new(&resources.node);
     command
         // The bundled Node 22 runtime supports this flag. Proxy environment
         // variables are filled from the OS settings immediately before spawn.
         .arg("--use-env-proxy")
-        .arg(cli)
+        .arg(&resources.cli)
         .arg("serve")
-        .current_dir(runtime_dir)
+        .current_dir(&resources.runtime_dir)
         .env("DASHOU_CONFIG_DIR", &config_dir)
         .env("DASHOU_STATE_DIR", data_dir.join("state"))
         .env("DASHOU_TRUST_PROXY", "1")
         .env("DASHOU_PILOT_POLICY_URL", pilot_policy_url)
         .env("DASHOU_PILOT_POLICY_PUBLIC_KEY", pilot_public_key)
         .env("DASHOU_PILOT_POLICY_TOKEN", pilot_token)
-        .env("DASHOU_CLOUDFLARED_PATH", cloudflared)
+        .env("DASHOU_CLOUDFLARED_PATH", &resources.cloudflared)
         .env("DASHOU_EMBEDDED_RUNTIME", "1")
         .env("PATH", path)
         .stdin(Stdio::null())
@@ -1940,6 +1949,61 @@ fn platform_name() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
+fn resolve_runtime_resources(resource_dir: &Path) -> Result<RuntimeResources, String> {
+    let candidate_root = locate_resource_root(resource_dir);
+    let root = canonical_resource_path(candidate_root)?;
+    let node = canonical_resource_file(root.join("node-runtime").join(node_name()))?;
+    let cli = canonical_resource_file(
+        root.join("dashou-runtime")
+            .join("dist")
+            .join("dashou-cli.js"),
+    )?;
+    let cloudflared = canonical_resource_file(root.join("cloudflared").join(cloudflared_name()))?;
+    let runtime_dir = canonical_resource_directory(root.join("dashou-runtime"))?;
+
+    Ok(RuntimeResources {
+        root,
+        node,
+        cli,
+        cloudflared,
+        runtime_dir,
+    })
+}
+
+fn canonical_resource_file(path: PathBuf) -> Result<PathBuf, String> {
+    let canonical = canonical_resource_path(path)?;
+    if canonical.is_file() {
+        Ok(canonical)
+    } else {
+        Err("[MISSING_RESOURCES]".into())
+    }
+}
+
+fn canonical_resource_directory(path: PathBuf) -> Result<PathBuf, String> {
+    let canonical = canonical_resource_path(path)?;
+    if canonical.is_dir() {
+        Ok(canonical)
+    } else {
+        Err("[MISSING_RESOURCES]".into())
+    }
+}
+
+fn canonical_resource_path(path: PathBuf) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        // Check before canonicalization: Windows can resolve `E:` to the
+        // current directory on drive E and would otherwise hide the bug.
+        return Err("[MISSING_RESOURCES]".into());
+    }
+    let canonical = fs::canonicalize(path).map_err(|_| "[MISSING_RESOURCES]".to_string())?;
+    if canonical.is_absolute() {
+        Ok(canonical)
+    } else {
+        // A drive-relative Windows path such as `E:` is not a safe process
+        // path. Reject it before it can reach CreateProcess or Node.
+        Err("[MISSING_RESOURCES]".into())
+    }
+}
+
 fn locate_resource_root(resource_dir: &Path) -> PathBuf {
     let candidates = [
         resource_dir.to_path_buf(),
@@ -2172,6 +2236,48 @@ mod tests {
     }
 
     #[test]
+    fn resolves_runtime_resources_as_canonical_absolute_paths() {
+        let root = test_root("runtime-resources");
+        make_resource_tree(&root);
+
+        let resources = resolve_runtime_resources(&root).expect("resolve runtime resources");
+        assert!(resources.root.is_absolute());
+        assert!(resources.node.is_absolute());
+        assert!(resources.cli.is_absolute());
+        assert!(resources.cloudflared.is_absolute());
+        assert!(resources.runtime_dir.is_absolute());
+        assert!(resources.node.is_file());
+        assert!(resources.cli.is_file());
+        assert!(resources.cloudflared.is_file());
+        assert!(resources.runtime_dir.is_dir());
+
+        fs::remove_dir_all(root).expect("remove resource test directory");
+    }
+
+    #[test]
+    fn missing_runtime_resource_is_rejected_before_spawn() {
+        let root = test_root("runtime-resources-missing");
+        make_resource_tree(&root);
+        fs::remove_file(root.join("cloudflared").join(cloudflared_name()))
+            .expect("remove cloudflared fixture");
+
+        assert_eq!(
+            resolve_runtime_resources(&root).err().as_deref(),
+            Some("[MISSING_RESOURCES]")
+        );
+
+        fs::remove_dir_all(root).expect("remove resource test directory");
+    }
+
+    #[test]
+    fn drive_relative_resource_path_is_rejected_before_canonicalization() {
+        assert_eq!(
+            canonical_resource_path(PathBuf::from("E:")).err().as_deref(),
+            Some("[MISSING_RESOURCES]")
+        );
+    }
+
+    #[test]
     fn locates_flat_resource_root() {
         let root = test_root("flat");
         make_resource_tree(&root);
@@ -2205,7 +2311,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.3-rc.7".into(),
+            version: "0.1.3-rc.8".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -2220,7 +2326,7 @@ mod tests {
     #[test]
     fn desktop_snapshot_does_not_serialize_secrets_or_file_contents() {
         let snapshot = DesktopSnapshot {
-            version: "0.1.3-rc.7".into(),
+            version: "0.1.3-rc.8".into(),
             configured: true,
             allowed_roots: vec!["/work/project".into()],
             runtime_phase: "ready".into(),
@@ -2332,7 +2438,7 @@ mod tests {
                 unix_seconds: 1_786_838_400,
                 stage: "application_submit_failed".into(),
                 outcome: "error".into(),
-                app_version: "0.1.3-rc.7".into(),
+                app_version: "0.1.3-rc.8".into(),
                 error_code: Some("CONTROL_CONNECT".into()),
                 application_id: None,
             },
