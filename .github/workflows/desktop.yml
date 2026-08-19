@@ -5,6 +5,15 @@ permissions:
 
 on:
   workflow_dispatch:
+    inputs:
+      macos_signing_mode:
+        description: "macOS 发布方式"
+        required: true
+        type: choice
+        default: adhoc
+        options:
+          - adhoc
+          - developer-id
   push:
     tags:
       - "desktop-v*"
@@ -40,6 +49,8 @@ jobs:
   build-macos:
     needs: verify-source
     runs-on: macos-15
+    env:
+      DASHOU_MACOS_SIGNING_MODE: ${{ inputs.macos_signing_mode || vars.DASHOU_MACOS_SIGNING_MODE || 'adhoc' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -48,28 +59,50 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: npm ci --prefix desktop
-      - name: Require Apple Developer ID and notarization credentials
+      - name: Select macOS signing mode
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           set -euo pipefail
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-            test -n "${!name:-}" || { echo "Missing required GitHub secret: $name" >&2; exit 1; }
-          done
+          case "$DASHOU_MACOS_SIGNING_MODE" in
+            adhoc)
+              echo "Using free macOS pilot mode: ad-hoc signing, no Apple Developer ID or notarization."
+              echo 'APPLE_SIGNING_IDENTITY=-' >> "$GITHUB_ENV"
+              ;;
+            developer-id)
+              for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY_CONTENT APPLE_API_KEY APPLE_API_ISSUER; do
+                test -n "${!name:-}" || { echo "Missing required GitHub secret: $name" >&2; exit 1; }
+              done
+              ;;
+            *)
+              echo "Unsupported DASHOU_MACOS_SIGNING_MODE: $DASHOU_MACOS_SIGNING_MODE" >&2
+              exit 1
+              ;;
+          esac
       - name: Import Apple Developer ID certificate
+        if: env.DASHOU_MACOS_SIGNING_MODE == 'developer-id'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           set -euo pipefail
           certificate="$RUNNER_TEMP/dashou-developer-id.p12"
+          api_key="$RUNNER_TEMP/AuthKey.p8"
           keychain="$RUNNER_TEMP/dashou-signing.keychain-db"
           keychain_password="$(openssl rand -hex 32)"
           printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          printf '%s' "$APPLE_API_KEY_CONTENT" | base64 --decode > "$api_key"
+          chmod 600 "$api_key"
+          echo "APPLE_API_KEY_PATH=$api_key" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY=$APPLE_API_KEY" >> "$GITHUB_ENV"
+          echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
           security create-keychain -p "$keychain_password" "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
@@ -94,11 +127,9 @@ jobs:
           DASHOU_CLOUDFLARED_SHA256: ae6ee90188ae5833c687ce937c3693e28403677607c06c65a2ff2b6a022f50e4
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri:build --prefix desktop -- --bundles app,dmg
       - name: Verify Developer ID signature, notarization and stapling
+        if: env.DASHOU_MACOS_SIGNING_MODE == 'developer-id'
         run: |
           set -euo pipefail
           app="desktop/src-tauri/target/release/bundle/macos/Dashou.app"
@@ -108,6 +139,15 @@ jobs:
           spctl --assess --type execute --verbose=4 "$app"
           xcrun stapler validate "$app"
           xcrun stapler validate "$dmg"
+      - name: Verify free pilot app bundle
+        if: env.DASHOU_MACOS_SIGNING_MODE == 'adhoc'
+        run: |
+          set -euo pipefail
+          app="desktop/src-tauri/target/release/bundle/macos/Dashou.app"
+          dmg="$(find desktop/src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -print -quit)"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          test -n "$dmg"
+          echo "Ad-hoc macOS pilot artifact ready: $dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: dashou-macos-arm64
@@ -116,6 +156,8 @@ jobs:
   build-macos-x64:
     needs: verify-source
     runs-on: macos-15-intel
+    env:
+      DASHOU_MACOS_SIGNING_MODE: ${{ inputs.macos_signing_mode || vars.DASHOU_MACOS_SIGNING_MODE || 'adhoc' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -124,28 +166,50 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: npm ci --prefix desktop
-      - name: Require Apple Developer ID and notarization credentials
+      - name: Select macOS signing mode
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           set -euo pipefail
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-            test -n "${!name:-}" || { echo "Missing required GitHub secret: $name" >&2; exit 1; }
-          done
+          case "$DASHOU_MACOS_SIGNING_MODE" in
+            adhoc)
+              echo "Using free macOS pilot mode: ad-hoc signing, no Apple Developer ID or notarization."
+              echo 'APPLE_SIGNING_IDENTITY=-' >> "$GITHUB_ENV"
+              ;;
+            developer-id)
+              for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY_CONTENT APPLE_API_KEY APPLE_API_ISSUER; do
+                test -n "${!name:-}" || { echo "Missing required GitHub secret: $name" >&2; exit 1; }
+              done
+              ;;
+            *)
+              echo "Unsupported DASHOU_MACOS_SIGNING_MODE: $DASHOU_MACOS_SIGNING_MODE" >&2
+              exit 1
+              ;;
+          esac
       - name: Import Apple Developer ID certificate
+        if: env.DASHOU_MACOS_SIGNING_MODE == 'developer-id'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           set -euo pipefail
           certificate="$RUNNER_TEMP/dashou-developer-id.p12"
+          api_key="$RUNNER_TEMP/AuthKey.p8"
           keychain="$RUNNER_TEMP/dashou-signing.keychain-db"
           keychain_password="$(openssl rand -hex 32)"
           printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          printf '%s' "$APPLE_API_KEY_CONTENT" | base64 --decode > "$api_key"
+          chmod 600 "$api_key"
+          echo "APPLE_API_KEY_PATH=$api_key" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY=$APPLE_API_KEY" >> "$GITHUB_ENV"
+          echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
           security create-keychain -p "$keychain_password" "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
@@ -170,11 +234,9 @@ jobs:
           DASHOU_CLOUDFLARED_SHA256: 3f74d697045ecf56dd2fbeb42f59767ecdf4067c409d55f080563923e8a1bb32
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri:build --prefix desktop -- --bundles app,dmg
       - name: Verify Developer ID signature, notarization and stapling
+        if: env.DASHOU_MACOS_SIGNING_MODE == 'developer-id'
         run: |
           set -euo pipefail
           app="desktop/src-tauri/target/release/bundle/macos/Dashou.app"
@@ -184,6 +246,15 @@ jobs:
           spctl --assess --type execute --verbose=4 "$app"
           xcrun stapler validate "$app"
           xcrun stapler validate "$dmg"
+      - name: Verify free pilot app bundle
+        if: env.DASHOU_MACOS_SIGNING_MODE == 'adhoc'
+        run: |
+          set -euo pipefail
+          app="desktop/src-tauri/target/release/bundle/macos/Dashou.app"
+          dmg="$(find desktop/src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -print -quit)"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          test -n "$dmg"
+          echo "Ad-hoc macOS pilot artifact ready: $dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: dashou-macos-x64
@@ -315,8 +386,8 @@ jobs:
 
             ## 5 分钟开始使用
 
-            1. 安装并打开搭手，点击“申请开通”。
-            2. 管理员同意后，点击“添加文件夹”，选择一个或多个工作文件夹，再点击“开始使用”。
+            1. 安装并打开搭手，点击“加入试用”。
+            2. 搭手准备好后，点击“添加文件夹”，选择一个或多个工作文件夹，再点击“开始使用”。
             3. 点击“去 ChatGPT 连接”。搭手会自动复制地址并打开 ChatGPT。
             4. 在 ChatGPT“个人”页点击“创建应用”，粘贴地址；需要密码时回到搭手点击“复制授权密码”。
 
@@ -326,7 +397,7 @@ jobs:
 
             ![搭手已准备好](https://raw.githubusercontent.com/winston003/dashou/${{ github.ref_name }}/docs/images/ready-to-connect.jpg)
 
-            如果看不到“创建应用”：打开 ChatGPT **设置 → 应用（Apps）→ 高级设置（Advanced settings）→ 开发者模式（Developer mode）**；工作区管理员可从 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）** 进入。
+            如果看不到“创建应用”：打开 ChatGPT **设置 → 插件 → 开发者模式**，勾选 **“开发人员模式”** 和 **“在开发者模式下强制执行 CSP”**；工作区管理员可从 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）** 进入。
 
             官方说明：[Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt)
 
@@ -335,7 +406,7 @@ jobs:
             ## 最近变化
 
             - 修复 Windows 正式版启动时弹出黑色控制台窗口的问题。
-            - 申请失败时可直接复制隐私安全的排查信息给客服。
+            - 准备失败时可直接复制隐私安全的排查信息给客服。
             - 支持选择多个工作文件夹。
             - 关闭窗口后继续驻留菜单栏，只有选择“退出搭手”才停止服务。
             - 安装包内置 Node.js 和 `cloudflared`，用户不需要另行安装。

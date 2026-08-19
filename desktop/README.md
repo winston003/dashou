@@ -38,4 +38,6 @@ DASHOU_CLOUDFLARED_BINARY=/absolute/path/to/cloudflared npm run desktop:build
 
 构建会在未配置真实 Tauri updater 公钥时停止。只在发布环境通过 `desktop/scripts/configure-release.mjs` 配置公钥；updater 私钥不得提交。
 
+桌面外壳支持签名文案包和签名 UI 小包。发布边界、自动回滚和 GitHub Actions 操作见 [`../docs/UI_UPDATES.md`](../docs/UI_UPDATES.md)。
+
 CI 分别构建 macOS Apple Silicon、Intel 与 Windows NSIS 安装包，并校验固定的 Cloudflare `cloudflared` 资产。受控 macOS 内测包使用 Tauri 官方支持的 ad-hoc 签名，仍可能要求用户在“隐私与安全”中明确允许；面向广泛公众分发前必须换成 Apple Developer ID/notarization，并为 Windows 配置 Authenticode。

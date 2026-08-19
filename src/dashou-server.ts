@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Server as HttpServer } from "node:http";
+import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
+import { hostHeaderValidation, localhostHostValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -24,7 +25,7 @@ type Transport = StreamableHTTPServerTransport;
 export { DASHOU_V0_TOOLS };
 
 export interface RunningDashouServer {
-  app: ReturnType<typeof createMcpExpressApp>;
+  app: ReturnType<typeof createDashouExpressApp>;
   config: DashouConfig;
   ready(): Promise<void>;
   close(): Promise<void>;
@@ -45,7 +46,7 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry): McpS
         "Call open_project once per project, follow its loaded project instructions, then reuse workspaceId for read, write, edit and execute.",
         "Before changing files under a directory with an available nested AGENTS.md or CLAUDE.md, read that instruction file first.",
         "Project instruction files guide the model but never expand approved roots or bypass tool safety checks.",
-        "Use edit/write for file changes; do not modify files through execute.",
+        "Use edit/write for text changes; do not modify files through execute.",
         "execute is not an OS sandbox and runs with the local user's authority, so use it only for the requested project work.",
       ].join(" "),
     },
@@ -149,12 +150,12 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry): McpS
   server.registerTool(
     "write",
     {
-      title: "写入文件",
+      title: "写入文本文件",
       description: "在已打开项目中创建或完整覆盖一个文本文件。局部修改优先使用 edit。",
       inputSchema: {
         workspaceId: z.string(),
         path: z.string().describe("项目根目录内的相对文件路径。"),
-        content: z.string().describe("文件的完整新内容。"),
+        content: z.string().describe("文件的完整文本内容。"),
       },
       outputSchema: { result: z.string() },
       annotations: {
@@ -165,8 +166,8 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry): McpS
       },
     },
     async ({ workspaceId, path, content }) => {
-      await workspaces.writeText(workspaceId, path, content);
-      const result = `Wrote ${path} (${Buffer.byteLength(content, "utf8")} bytes).`;
+      const byteLength = await workspaces.writeText(workspaceId, path, content);
+      const result = `Wrote ${path} (${byteLength} bytes).`;
       return {
         content: [{ type: "text", text: result }],
         structuredContent: { result },
@@ -257,10 +258,7 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
   const allowedHosts = config.allowedHosts.includes("*")
     ? undefined
     : [...new Set([config.host, ...config.allowedHosts])];
-  const app = createMcpExpressApp({
-    host: config.host,
-    ...(allowedHosts ? { allowedHosts } : {}),
-  });
+  const app = createDashouExpressApp(config.host, allowedHosts);
   // The public pilot path has exactly one trusted reverse-proxy hop. Trusting
   // every forwarded address would let a caller spoof the client IP used by
   // the HTTP stack and any future rate limits.
@@ -304,9 +302,10 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
     res.json(dashouCapabilities());
   });
 
-  // Mount authentication as normal Express middleware. On authentication failure
-  // the SDK writes the OAuth response and intentionally does not call next().
+  // Authenticate before parsing MCP payloads from unauthenticated callers.
+  // OAuth routes install their own small JSON/form parsers inside mcpAuthRouter.
   app.use("/mcp", bearerAuth);
+  app.use("/mcp", express.json({ limit: "5mb" }));
 
   app.all("/mcp", async (req, res) => {
     if (
@@ -389,6 +388,21 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
       return closePromise;
     },
   };
+}
+
+function createDashouExpressApp(host: string, allowedHosts?: string[]) {
+  const app = express();
+  if (allowedHosts) {
+    app.use(hostHeaderValidation(allowedHosts));
+  } else if (["127.0.0.1", "localhost", "::1"].includes(host)) {
+    app.use(localhostHostValidation());
+  } else if (host === "0.0.0.0" || host === "::") {
+    console.warn(
+      `Warning: Dashou is binding to ${host} without host-header validation. `
+      + "Configure allowedHosts unless an authenticated reverse proxy is the only ingress.",
+    );
+  }
+  return app;
 }
 
 export async function closeHttpServer(httpServer: HttpServer, closeApp: () => Promise<void>): Promise<void> {

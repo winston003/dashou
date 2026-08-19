@@ -91,7 +91,6 @@ try {
   assert(executed.result?.structuredContent?.stdout === "public-executed", "public execute did not return expected stdout");
   assert(await readFile(join(project, "notes.txt"), "utf8") === "after public smoke\n", "public edit did not change the local file");
   assert(await readFile(join(project, "created.txt"), "utf8") === "created public smoke\n", "public write did not create the local file");
-
   console.log(JSON.stringify({
     ok: true,
     evidence: "ephemeral Cloudflare Quick Tunnel",

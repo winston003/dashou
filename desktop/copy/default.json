@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "version": "built-in",
+  "messages": {
+    "setupTitle": "让这台电脑用上搭手",
+    "setupIntro": "目前是小范围试用。我们会先确认当前名额；有名额后，搭手会自动为这台电脑做好准备。",
+    "joinTrial": "加入试用",
+    "trialIdle": "还没有加入",
+    "trialPendingTitle": "已经收到，正在确认试用名额",
+    "trialPendingBody": "通常几分钟内会有结果。你可以关闭窗口，下次打开时继续查看。",
+    "trialProvisioningTitle": "正在为这台电脑准备搭手",
+    "trialProvisioningBody": "我们正在创建连接，并确认它可以正常使用。",
+    "trialSlow": "这次准备得比平时久一些。你可以重新检查；关闭窗口也不会中断准备。",
+    "readyTitle": "搭手已经准备好了",
+    "readyBody": "现在请选择你愿意让 ChatGPT 使用的文件夹。没有选择的文件夹不会出现在搭手中。",
+    "trustTitle": "你始终做主",
+    "trustBody": "文件读取和修改只发生在你选择的文件夹中。运行项目命令时，搭手会使用你当前电脑账户的权限。你可以随时添加或移除文件夹。",
+    "failureTitle": "这次没有准备好",
+    "failureBody": "可能是网络暂时不稳定。你可以重新试一次；如果仍然不行，把排查信息发给我们。"
+  }
+}

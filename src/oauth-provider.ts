@@ -277,6 +277,12 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
   ): void {
     const access = this.pilotGate.status();
     if (!access.allowed) {
+      if (ErrorType === InvalidTokenError) {
+        // The SDK copies InvalidTokenError.message into WWW-Authenticate.
+        // HTTP header values must stay ASCII/Latin-1 safe; a localized pilot
+        // reason here would make Node reject the header before sending 401.
+        throw new InvalidTokenError("Dashou access is currently unavailable");
+      }
       throw new ErrorType(`搭手试用不可用：${access.reason}`);
     }
   }
