@@ -2165,6 +2165,12 @@ const DEVICE_NICKNAMES: &[&str] = &[
     "星河", "小麦",
 ];
 
+const PREPARE_UPDATE_ARG: &str = "--prepare-update";
+
+fn prepare_update_requested(args: &[String]) -> bool {
+    args.iter().any(|argument| argument == PREPARE_UPDATE_ARG)
+}
+
 fn load_or_create_device_identity(data_dir: &Path) -> Result<DeviceIdentity, String> {
     let path = data_dir.join("device.json");
     if let Ok(text) = fs::read_to_string(&path) {
@@ -2385,8 +2391,15 @@ pub fn run() {
         // This must be the first plugin: a second launch is routed to the
         // already-running instance before it can create another window or
         // attempt to start a second local runtime.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            show_main_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if prepare_update_requested(&argv) {
+                if let Some(state) = app.try_state::<DaemonState>() {
+                    let _ = stop_child(&state);
+                }
+                app.exit(0);
+            } else {
+                show_main_window(app);
+            }
         }))
         .plugin(tauri_plugin_process::init())
         .plugin(
@@ -2408,6 +2421,8 @@ pub fn run() {
             meta: RuntimeMeta::default(),
         })))
         .setup(|app| {
+            let prepare_for_update =
+                prepare_update_requested(&std::env::args().collect::<Vec<_>>());
             let show_item = MenuItemBuilder::with_id("show", "显示搭手").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "退出搭手").build(app)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
@@ -2431,11 +2446,18 @@ pub fn run() {
             tray.build(app)?;
             let started_hidden = std::env::args().any(|argument| argument == "--hidden");
             if let Some(window) = app.get_webview_window("main") {
-                if started_hidden {
+                if started_hidden || prepare_for_update {
                     let _ = window.hide();
                 } else {
                     let _ = window.show();
                 }
+            }
+            if prepare_for_update {
+                if let Some(state) = app.try_state::<DaemonState>() {
+                    let _ = stop_child(&state);
+                }
+                app.handle().exit(0);
+                return Ok(());
             }
             let data_dir = app.path().app_data_dir()?;
             if configuration_is_ready(
@@ -2614,7 +2636,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.3-rc.11".into(),
+            version: "0.1.3-rc.12".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -2629,7 +2651,7 @@ mod tests {
     #[test]
     fn desktop_snapshot_does_not_serialize_secrets_or_file_contents() {
         let snapshot = DesktopSnapshot {
-            version: "0.1.3-rc.11".into(),
+            version: "0.1.3-rc.12".into(),
             device_nickname: "搭手·青柠-4827".into(),
             device_fingerprint: "7F3A-91C2".into(),
             platform: "macos-aarch64".into(),
@@ -2764,7 +2786,7 @@ mod tests {
                 unix_seconds: 1_786_838_400,
                 stage: "application_submit_failed".into(),
                 outcome: "error".into(),
-                app_version: "0.1.3-rc.11".into(),
+                app_version: "0.1.3-rc.12".into(),
                 error_code: Some("CONTROL_CONNECT".into()),
                 application_id: None,
                 device_nickname: Some("搭手·青柠-4827".into()),
@@ -2945,6 +2967,18 @@ mod tests {
             b"INFO: No tasks are running which match the specified criteria.",
             4242
         ));
+    }
+
+    #[test]
+    fn prepare_update_arg_is_exact_and_does_not_match_user_text() {
+        assert!(prepare_update_requested(&[
+            "Dashou.exe".into(),
+            PREPARE_UPDATE_ARG.into(),
+        ]));
+        assert!(!prepare_update_requested(&[
+            "Dashou.exe".into(),
+            "--prepare-update-now".into(),
+        ]));
     }
 
     #[cfg(windows)]
