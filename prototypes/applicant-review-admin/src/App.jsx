@@ -141,6 +141,7 @@ export function App() {
   const [analytics, setAnalytics] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
   const [analyticsError, setAnalyticsError] = useState("");
+  const [resourcePolicy, setResourcePolicy] = useState(null);
 
   useEffect(() => {
     void loadApplications();
@@ -207,6 +208,7 @@ export function App() {
     setListError("");
     try {
       const payload = await apiRequest("/api/admin/applications");
+      setResourcePolicy(payload.resourcePolicy?.enforced === true ? payload.resourcePolicy : null);
       const next = [...(payload.applications ?? [])].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
       setApplications(next);
       setLastUpdated(new Date());
@@ -472,6 +474,13 @@ export function App() {
 
           <AnalyticsPanel analytics={analytics} loading={analyticsLoading} error={analyticsError} />
 
+          {!listLoading && !resourcePolicy && (
+            <div className="safety-check needs-attention policy-warning">
+              <WarningCircle size={23} weight="fill" />
+              <div><strong>线上控制面尚未启用资源配额保护</strong><span>批准、客户归属和连接释放已在本机禁用；部署资源所有权迁移与新版 Worker 后才会开放。</span></div>
+            </div>
+          )}
+
           <div className="filter-row" aria-label="按状态筛选">
             <div className="status-filters">
               {filterOptions.map(([value, label]) => (
@@ -568,7 +577,7 @@ export function App() {
                     {selected.reason && <div><dt>处理原因</dt><dd>{selected.reason}</dd></div>}
                     <div><dt>基本信息备注</dt><dd>{selected.profileNote || "暂无"}</dd></div>
                   </dl>
-                  <button className="secondary-button" type="button" onClick={openSubjectEditor}>调整客户归属</button>
+                  {resourcePolicy && <button className="secondary-button" type="button" onClick={openSubjectEditor}>调整客户归属</button>}
                 </section>
 
                 {(selectedDetail?.relatedApplications ?? []).length > 0 && (
@@ -611,7 +620,7 @@ export function App() {
                       <label>授予访问权限时长</label>
                       <div className="period-control">{periodOptions.map(([value, shortLabel]) => <button className={period === value ? "active" : ""} key={value} type="button" onClick={() => setPeriod(value)}>{shortLabel}</button>)}</div>
                       <span className="decision-hint">确认后会立即调用线上控制面，到期自动失效。</span>
-                      <button className="approve-button" type="button" onClick={openApproval}><Check size={20} weight="bold" />批准 {periodLabel}</button>
+                      <button className="approve-button" type="button" onClick={openApproval} disabled={!resourcePolicy}><Check size={20} weight="bold" />{resourcePolicy ? `批准 ${periodLabel}` : "等待控制面安全升级"}</button>
                       <button className="reject-button" type="button" onClick={() => { setActionError(""); setModal("reject"); setReason(""); }}>填写原因并拒绝</button>
                     </section>
                   </>
@@ -634,7 +643,7 @@ export function App() {
                       <button className="secondary-button" type="button" onClick={openAuthorizationEditor}>编辑授权到期时间</button>
                       <button className="secondary-button" type="button" onClick={() => { setActionError(""); setModal("note"); setNote(""); }}>添加内部备注</button>
                       <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("revoke"); setReason(""); }}>撤销设备权限</button>
-                      {selected.resourceState && selected.resourceState !== "deleted" && <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("retire"); setReason(""); }}>释放专属连接</button>}
+                      {resourcePolicy && selected.resourceState && selected.resourceState !== "deleted" && <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("retire"); setReason(""); }}>释放专属连接</button>}
                     </section>
                   </>
                 ) : selected.status === "activated" ? (
@@ -648,7 +657,7 @@ export function App() {
                       <button className="secondary-button" type="button" onClick={openAuthorizationEditor}>编辑授权到期时间</button>
                       <button className="secondary-button" type="button" onClick={() => { setActionError(""); setModal("note"); setNote(""); }}>添加内部备注</button>
                       <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("revoke"); setReason(""); }}>撤销设备权限</button>
-                      {selected.resourceState && selected.resourceState !== "deleted" && <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("retire"); setReason(""); }}>释放专属连接</button>}
+                      {resourcePolicy && selected.resourceState && selected.resourceState !== "deleted" && <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("retire"); setReason(""); }}>释放专属连接</button>}
                     </section>
                   </>
                 ) : (
@@ -656,7 +665,7 @@ export function App() {
                     <div className={`result-panel result-${selected.status}`}><StatusBadge status={selected.status} /><strong>{resultSummary(selected)}</strong><span>该状态来自线上控制面，可在事件时间线中追溯。</span></div>
                     <section className="decision-section status-actions">
                       {selected.status === "revoked" && <button className="approve-button" type="button" onClick={() => { setActionError(""); setModal("restore"); setReason(""); }}>恢复到撤销前状态</button>}
-                      {selected.resourceState && selected.resourceState !== "deleted" && <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("retire"); setReason(""); }}>释放专属连接</button>}
+                      {resourcePolicy && selected.resourceState && selected.resourceState !== "deleted" && <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("retire"); setReason(""); }}>释放专属连接</button>}
                       {selected.expiresAt && <button className="secondary-button" type="button" onClick={openAuthorizationEditor}>编辑授权到期时间</button>}
                       <button className="secondary-button" type="button" onClick={() => { setActionError(""); setModal("note"); setNote(""); }}>添加内部备注</button>
                     </section>

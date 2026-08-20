@@ -298,7 +298,7 @@ async function adminApplicationList(request, env, url) {
   const result = await env.DB.prepare("SELECT * FROM pilot_applications ORDER BY created_at").all();
   const rows = result.results ?? [];
   const visibleRows = status ? rows.filter((row) => row.status === status) : rows;
-  return json({ applications: visibleRows.map((row) => adminApplicationSummary(row, rows)) });
+  return json({ resourcePolicy: resourcePolicySummary(env), applications: visibleRows.map((row) => adminApplicationSummary(row, rows)) });
 }
 
 async function adminApplicationDetail(request, env, applicationId) {
@@ -316,6 +316,7 @@ async function adminApplicationDetail(request, env, applicationId) {
     env.DB.prepare("SELECT * FROM pilot_applications ORDER BY created_at").all(),
   ]);
   return json({
+    resourcePolicy: resourcePolicySummary(env),
     application: adminApplicationSummary(row, allApplications.results ?? []),
     relatedApplications: relatedApplicationSummaries(row, allApplications.results ?? []),
     events: (eventResult.results ?? []).map((event) => ({
@@ -913,6 +914,15 @@ function maxActiveResources(value) {
     throw new Error("DASHOU_MAX_ACTIVE_RESOURCES must be an integer between 1 and 10000");
   }
   return parsed;
+}
+
+function resourcePolicySummary(env) {
+  return {
+    version: 1,
+    enforced: true,
+    requiresSubjectId: true,
+    maxRetainedResources: maxActiveResources(env.DASHOU_MAX_ACTIVE_RESOURCES),
+  };
 }
 
 function normalizedSubjectId(value) {

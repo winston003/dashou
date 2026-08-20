@@ -225,6 +225,7 @@ dd { margin: 0; color: #493f38; font-size: 13px; line-height: 1.55; }
 .safety-check span { font-size: 12px; line-height: 1.45; }
 .safety-check.safe { border-color: #b7dcc6; background: var(--green-soft); color: var(--green); }
 .safety-check.needs-attention { border-color: #ecd2a9; background: var(--amber-soft); color: #99611f; }
+.policy-warning { max-width: 1190px; margin: 0 auto 15px; }
 .decision-section { display: grid; }
 .decision-section > label { margin-bottom: 9px; font-size: 13px; font-weight: 650; }
 .period-control { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }

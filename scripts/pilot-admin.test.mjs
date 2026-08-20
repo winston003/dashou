@@ -28,7 +28,7 @@ test("admin CLI lists and approves device applications from any working director
           createdAt: "2026-08-16T00:00:00.000Z",
         }] }));
       } else if (request.method === "GET") {
-        response.end(JSON.stringify({ application: {
+        response.end(JSON.stringify({ resourcePolicy: { version: 1, enforced: true, requiresSubjectId: true, maxRetainedResources: 180 }, application: {
           applicationId: "req_testapplication1234",
           status: "approved",
           deviceName: "Alice Mac",
@@ -79,7 +79,8 @@ test("admin CLI lists and approves device applications from any working director
   assert.deepEqual(requests.map(({ method, url, authorization }) => ({ method, url, authorization })), [
     { method: "GET", url: "/admin/applications?status=pending", authorization: "Bearer admin-config-token" },
     { method: "GET", url: "/admin/applications/req_testapplication1234", authorization: "Bearer admin-config-token" },
+    { method: "GET", url: "/admin/applications/req_testapplication1234", authorization: "Bearer admin-config-token" },
     { method: "POST", url: "/admin/applications/req_testapplication1234/approve", authorization: "Bearer admin-config-token" },
   ]);
-  assert.deepEqual(JSON.parse(requests[2].body), { period: "month", subjectId: "customer-alice" });
+  assert.deepEqual(JSON.parse(requests[3].body), { period: "month", subjectId: "customer-alice" });
 });

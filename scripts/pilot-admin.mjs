@@ -29,6 +29,10 @@ if (scope === "applications") {
     const applicationId = requiredArgument(subject, "applicationId");
     const period = option("--period") || "month";
     const subjectId = requiredArgument(option("--subject"), "--subject");
+    const preflight = await call("GET", `/admin/applications/${encodeURIComponent(applicationId)}`);
+    if (preflight.resourcePolicy?.enforced !== true || preflight.resourcePolicy?.version !== 1) {
+      throw new Error("线上控制面尚未启用资源所有权保护，已拒绝批准；请先部署最新 D1 migration 和 Worker");
+    }
     const payload = await call("POST", `/admin/applications/${encodeURIComponent(applicationId)}/approve`, { period, subjectId });
     console.log(`已批准 ${payload.applicationId}，授权周期：${periodLabel(payload.period)}，到期：${formatDate(payload.expiresAt)}`);
     console.log(`设备连接：${payload.mcpUrl}`);
