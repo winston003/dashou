@@ -78,7 +78,11 @@ const auditLabels = {
   authorization_extended: "管理员延长授权",
   authorization_changed: "管理员修改授权日期",
   revoked: "管理员撤销权限",
+  retirement_started: "开始释放专属连接",
+  retired: "专属连接已释放",
+  retirement_failed: "专属连接释放失败",
   restored: "管理员恢复权限",
+  subject_changed: "管理员调整客户归属",
   profile_updated: "管理员更新基本信息",
   note_added: "管理员添加内部备注",
 };
@@ -124,6 +128,7 @@ export function App() {
   const [profileNickname, setProfileNickname] = useState("");
   const [profileNote, setProfileNote] = useState("");
   const [expiresAtInput, setExpiresAtInput] = useState("");
+  const [subjectId, setSubjectId] = useState("");
   const [toast, setToast] = useState("");
   const [profileOpen, setProfileOpen] = useState(false);
   const [listLoading, setListLoading] = useState(true);
@@ -182,6 +187,9 @@ export function App() {
         application.nickname,
         application.profileNote,
         application.platform,
+        application.deviceId,
+        application.deviceFingerprint,
+        application.subjectId,
       ].filter(Boolean).join(" ").toLowerCase();
       return matchesStatus && (!normalized || haystack.includes(normalized));
     });
@@ -242,13 +250,13 @@ export function App() {
   }
 
   async function approveSelected() {
-    if (!selected) return;
+    if (!selected || !validSubjectId(subjectId)) return;
     setSubmitting(true);
     setActionError("");
     try {
       await apiRequest(`/api/admin/applications/${encodeURIComponent(selected.applicationId)}/approve`, {
         method: "POST",
-        body: JSON.stringify({ period }),
+        body: JSON.stringify({ period, subjectId: subjectId.trim().toLowerCase() }),
       });
       setModal(null);
       notify(`已批准 ${applicationTitle(selected)}，系统正在准备连接`);
@@ -302,6 +310,16 @@ export function App() {
     await submitAction(`/api/admin/applications/${encodeURIComponent(selected.applicationId)}/revoke`, { reason: reason.trim() }, "设备权限已撤销");
   }
 
+  async function retireSelected() {
+    if (!selected || !reason.trim()) return;
+    await submitAction(`/api/admin/applications/${encodeURIComponent(selected.applicationId)}/retire`, { reason: reason.trim() }, "专属连接已释放，可安全批准替换申请");
+  }
+
+  async function setSubjectSelected() {
+    if (!selected || !validSubjectId(subjectId) || !reason.trim()) return;
+    await submitAction(`/api/admin/applications/${encodeURIComponent(selected.applicationId)}/subject`, { subjectId: subjectId.trim().toLowerCase(), reason: reason.trim() }, "客户归属已更新");
+  }
+
   async function restoreSelected() {
     if (!selected || !reason.trim()) return;
     await submitAction(`/api/admin/applications/${encodeURIComponent(selected.applicationId)}/restore`, { reason: reason.trim() }, "设备权限已恢复");
@@ -349,6 +367,19 @@ export function App() {
     setReason("");
     setActionError("");
     setModal("authorization");
+  }
+
+  function openApproval() {
+    setSubjectId(selected?.subjectId?.startsWith("legacy-") ? "" : (selected?.subjectId || ""));
+    setActionError("");
+    setModal("approve");
+  }
+
+  function openSubjectEditor() {
+    setSubjectId(selected?.subjectId?.startsWith("legacy-") ? "" : (selected?.subjectId || ""));
+    setReason("");
+    setActionError("");
+    setModal("subject");
   }
 
   async function addNoteSelected() {
@@ -516,18 +547,42 @@ export function App() {
             ) : (
               <>
                 <div className="applicant-summary"><UserCircle size={54} weight="duotone" aria-hidden="true" /><div><strong>{applicationTitle(selected)}</strong><span>{selected.deviceName}</span><code>{selected.applicationId}</code></div><button className="secondary-button" type="button" onClick={openProfileEditor}>编辑基本信息</button></div>
+                {(selected.duplicateRisk || (selectedDetail?.relatedApplications ?? []).length > 0) && (
+                  <div className="safety-check needs-attention">
+                    <WarningCircle size={23} weight="fill" />
+                    <div><strong>发现可能关联的历史申请</strong><span>批准前必须核对下方关联记录；客户端指纹只是线索，不是可信身份。</span></div>
+                  </div>
+                )}
                 <section className="detail-section">
                   <h3>申请信息</h3>
                   <dl>
                     <div><dt>联系方式</dt><dd>{selected.contact || "未填写联系方式"}</dd></div>
                     <div><dt>设备</dt><dd>{selected.deviceName} · {selected.platform}</dd></div>
+                    <div><dt>设备指纹</dt><dd className="mono">{selected.deviceFingerprint || "旧版本未上报"}</dd></div>
+                    <div><dt>设备 ID</dt><dd className="mono">{selected.deviceId}</dd></div>
+                    <div><dt>客户标识</dt><dd className="mono">{selected.subjectId || "尚未关联"}</dd></div>
+                    <div><dt>连接资源</dt><dd>{formatResourceState(selected.resourceState)}</dd></div>
                     <div><dt>提交时间</dt><dd>{formatDateTime(selected.createdAt)}</dd></div>
                     <div><dt>最近更新</dt><dd>{formatDateTime(selected.updatedAt)}</dd></div>
                     {selected.expiresAt && <div><dt>授权到期</dt><dd>{formatDateTime(selected.expiresAt)}</dd></div>}
                     {selected.reason && <div><dt>处理原因</dt><dd>{selected.reason}</dd></div>}
                     <div><dt>基本信息备注</dt><dd>{selected.profileNote || "暂无"}</dd></div>
                   </dl>
+                  <button className="secondary-button" type="button" onClick={openSubjectEditor}>调整客户归属</button>
                 </section>
+
+                {(selectedDetail?.relatedApplications ?? []).length > 0 && (
+                  <section className="detail-section related-section">
+                    <h3>关联申请</h3>
+                    {(selectedDetail?.relatedApplications ?? []).map((application) => (
+                      <button className="related-application" type="button" key={application.applicationId} onClick={() => selectApplication(application.applicationId)}>
+                        <strong>{application.deviceName}</strong>
+                        <span>{application.applicationId}</span>
+                        <small>{application.signals.map(formatRelationSignal).join(" · ")} · {statusMeta[application.status]?.label || application.status} · {formatResourceState(application.resourceState)}</small>
+                      </button>
+                    ))}
+                  </section>
+                )}
 
                 <section className="detail-section timeline-section">
                   <h3>事件时间线</h3>
@@ -556,7 +611,7 @@ export function App() {
                       <label>授予访问权限时长</label>
                       <div className="period-control">{periodOptions.map(([value, shortLabel]) => <button className={period === value ? "active" : ""} key={value} type="button" onClick={() => setPeriod(value)}>{shortLabel}</button>)}</div>
                       <span className="decision-hint">确认后会立即调用线上控制面，到期自动失效。</span>
-                      <button className="approve-button" type="button" onClick={() => { setActionError(""); setModal("approve"); }}><Check size={20} weight="bold" />批准 {periodLabel}</button>
+                      <button className="approve-button" type="button" onClick={openApproval}><Check size={20} weight="bold" />批准 {periodLabel}</button>
                       <button className="reject-button" type="button" onClick={() => { setActionError(""); setModal("reject"); setReason(""); }}>填写原因并拒绝</button>
                     </section>
                   </>
@@ -579,6 +634,7 @@ export function App() {
                       <button className="secondary-button" type="button" onClick={openAuthorizationEditor}>编辑授权到期时间</button>
                       <button className="secondary-button" type="button" onClick={() => { setActionError(""); setModal("note"); setNote(""); }}>添加内部备注</button>
                       <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("revoke"); setReason(""); }}>撤销设备权限</button>
+                      {selected.resourceState && selected.resourceState !== "deleted" && <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("retire"); setReason(""); }}>释放专属连接</button>}
                     </section>
                   </>
                 ) : selected.status === "activated" ? (
@@ -592,6 +648,7 @@ export function App() {
                       <button className="secondary-button" type="button" onClick={openAuthorizationEditor}>编辑授权到期时间</button>
                       <button className="secondary-button" type="button" onClick={() => { setActionError(""); setModal("note"); setNote(""); }}>添加内部备注</button>
                       <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("revoke"); setReason(""); }}>撤销设备权限</button>
+                      {selected.resourceState && selected.resourceState !== "deleted" && <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("retire"); setReason(""); }}>释放专属连接</button>}
                     </section>
                   </>
                 ) : (
@@ -599,6 +656,7 @@ export function App() {
                     <div className={`result-panel result-${selected.status}`}><StatusBadge status={selected.status} /><strong>{resultSummary(selected)}</strong><span>该状态来自线上控制面，可在事件时间线中追溯。</span></div>
                     <section className="decision-section status-actions">
                       {selected.status === "revoked" && <button className="approve-button" type="button" onClick={() => { setActionError(""); setModal("restore"); setReason(""); }}>恢复到撤销前状态</button>}
+                      {selected.resourceState && selected.resourceState !== "deleted" && <button className="danger-outline-button" type="button" onClick={() => { setActionError(""); setModal("retire"); setReason(""); }}>释放专属连接</button>}
                       {selected.expiresAt && <button className="secondary-button" type="button" onClick={openAuthorizationEditor}>编辑授权到期时间</button>}
                       <button className="secondary-button" type="button" onClick={() => { setActionError(""); setModal("note"); setNote(""); }}>添加内部备注</button>
                     </section>
@@ -621,9 +679,13 @@ export function App() {
       {modal === "approve" && selected && (
         <Modal title="确认线上批准" onClose={() => !submitting && setModal(null)}>
           <div className="confirm-person"><ShieldCheck size={34} weight="duotone" /><div><strong>为 {applicationTitle(selected)} 开通 {periodLabel}</strong><span>{selected.deviceName} · {selected.platform}</span></div></div>
-          <div className="live-action-warning"><CloudCheck size={20} weight="fill" /><span>这是线上操作。确认后会立即准备专属连接，并写入审核记录。</span></div>
+          <div className="live-action-warning"><CloudCheck size={20} weight="fill" /><span>同一客户只能保留一个专属连接。客户标识必须在重装或换设备后继续复用。</span></div>
+          <label className="reason-label" htmlFor="approve-subject">客户标识</label>
+          <input className="modal-input mono" id="approve-subject" value={subjectId} onChange={(event) => setSubjectId(event.target.value.toLowerCase())} placeholder="例如：customer-wanfeng" maxLength={64} autoFocus />
+          <p className="field-help">使用内部客户编号或稳定别名；不要填写随机设备昵称。允许小写字母、数字、点、下划线和连字符。</p>
+          {(selectedDetail?.relatedApplications ?? []).length > 0 && <div className="live-action-warning"><WarningCircle size={20} weight="fill" /><span>该申请有 {(selectedDetail?.relatedApplications ?? []).length} 条关联记录。若属于同一人，请使用相同客户标识；系统会阻止第二套连接。</span></div>}
           {actionError && <p className="action-error" role="alert">{actionError}</p>}
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setModal(null)} disabled={submitting}>返回检查</button><button className="approve-button" type="button" onClick={() => void approveSelected()} disabled={submitting}>{submitting ? <ArrowClockwise className="spin" size={19} /> : <Check size={19} weight="bold" />}{submitting ? "正在开通" : "确认线上批准"}</button></div>
+          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setModal(null)} disabled={submitting}>返回检查</button><button className="approve-button" type="button" onClick={() => void approveSelected()} disabled={!validSubjectId(subjectId) || submitting}>{submitting ? <ArrowClockwise className="spin" size={19} /> : <Check size={19} weight="bold" />}{submitting ? "正在开通" : "确认线上批准"}</button></div>
         </Modal>
       )}
 
@@ -673,6 +735,17 @@ export function App() {
         </Modal>
       )}
 
+      {modal === "retire" && selected && (
+        <Modal title="释放专属连接" onClose={() => !submitting && setModal(null)}>
+          <div className="live-action-warning"><WarningCircle size={20} weight="fill" /><span>这会禁用账号，并物理删除对应的 Cloudflare Tunnel 和 DNS。审核与历史记录仍会保留，但不能直接恢复。</span></div>
+          <label className="reason-label" htmlFor="retire-reason">释放原因</label>
+          <textarea id="retire-reason" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="例如：同一客户清理本地后改用新的申请。" maxLength={300} autoFocus />
+          <div className="textarea-meta"><span>{reason.length}/300</span></div>
+          {actionError && <p className="action-error" role="alert">{actionError}</p>}
+          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setModal(null)} disabled={submitting}>取消</button><button className="danger-button" type="button" onClick={() => void retireSelected()} disabled={!reason.trim() || submitting}>{submitting ? "正在释放" : "确认删除连接资源"}</button></div>
+        </Modal>
+      )}
+
       {modal === "restore" && selected && (
         <Modal title="恢复设备权限" onClose={() => !submitting && setModal(null)}>
           <div className="live-action-warning"><ShieldCheck size={20} weight="fill" /><span>恢复会重新启用账号，并返回撤销前的状态。请确认这是测试账号或已完成复核。</span></div>
@@ -707,6 +780,19 @@ export function App() {
           <div className="textarea-meta"><span>{profileNote.length}/1000</span></div>
           {actionError && <p className="action-error" role="alert">{actionError}</p>}
           <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setModal(null)} disabled={submitting}>取消</button><button className="approve-button" type="button" onClick={() => void editProfileSelected()} disabled={submitting}>{submitting ? "正在保存" : "保存基本信息"}</button></div>
+        </Modal>
+      )}
+
+      {modal === "subject" && selected && (
+        <Modal title="调整客户归属" onClose={() => !submitting && setModal(null)}>
+          <p className="modal-copy">客户标识决定资源配额归属。相同客户重装、换设备或重新申请时必须保持一致。</p>
+          <label className="reason-label" htmlFor="subject-id">客户标识</label>
+          <input className="modal-input mono" id="subject-id" value={subjectId} onChange={(event) => setSubjectId(event.target.value.toLowerCase())} placeholder="例如：customer-wanfeng" maxLength={64} autoFocus />
+          <label className="reason-label" htmlFor="subject-reason">调整原因</label>
+          <textarea id="subject-reason" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="例如：确认青柠、月牙和晚风属于同一客户。" maxLength={300} />
+          <div className="textarea-meta"><span>{reason.length}/300</span></div>
+          {actionError && <p className="action-error" role="alert">{actionError}</p>}
+          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setModal(null)} disabled={submitting}>取消</button><button className="approve-button" type="button" onClick={() => void setSubjectSelected()} disabled={!validSubjectId(subjectId) || !reason.trim() || submitting}>{submitting ? "正在保存" : "保存客户归属"}</button></div>
         </Modal>
       )}
 
@@ -844,6 +930,25 @@ function resultSummary(application) {
   if (application.status === "expired") return "授权已到期";
   if (application.status === "revoked") return "设备权限已撤销";
   return statusMeta[application.status]?.label || application.status;
+}
+
+function validSubjectId(value) {
+  return /^[a-z0-9][a-z0-9._-]{2,63}$/.test(value.trim().toLowerCase());
+}
+
+function formatResourceState(state) {
+  return ({
+    provisioning: "正在创建（占用名额）",
+    active: "已保留（占用名额）",
+    needs_reconcile: "需要对账（名额已锁定）",
+    deleting: "正在释放（名额已锁定）",
+    delete_failed: "释放失败（名额已锁定）",
+    deleted: "已物理释放",
+  })[state] || "尚未创建";
+}
+
+function formatRelationSignal(signal) {
+  return ({ same_customer: "同一客户标识", same_fingerprint: "相同设备指纹", same_contact: "相同联系方式" })[signal] || signal;
 }
 
 function formatPeriod(period) {

@@ -67,12 +67,13 @@ export DASHOU_PILOT_CONTROL_ADMIN_TOKEN='只在管理员终端注入'
 
 ```bash
 dashou admin applications list
-dashou admin applications approve req_xxx --period week
-dashou admin applications approve req_xxx --period month
-dashou admin applications approve req_xxx --period quarter
-dashou admin applications approve req_xxx --period year
+dashou admin applications approve req_xxx --period week --subject customer-alice
+dashou admin applications approve req_xxx --period month --subject customer-alice
+dashou admin applications approve req_xxx --period quarter --subject customer-alice
+dashou admin applications approve req_xxx --period year --subject customer-alice
 dashou admin applications reject req_xxx --reason '请联系客服核对设备'
 dashou admin applications revoke req_xxx
+dashou admin applications retire req_xxx --reason '同一客户改用新的申请'
 ```
 
 周/月/季/年目前是授权周期，不代表已经发生真实付款。真实计费接入支付提供商后再改变状态来源，设备申请与审批协议无需重做。
@@ -100,11 +101,13 @@ dashou admin applications revoke req_xxx
 - `POST /admin/applications/:id/notes`（追加管理员内部备注）
 - `POST /admin/applications/:id/profile`（编辑管理员侧昵称和基本信息备注）
 - `POST /admin/applications/:id/revoke`（可逆停用，保留原授权凭证和历史）
+- `POST /admin/applications/:id/retire`（禁用账号并物理删除 Tunnel/DNS；历史保留但不能直接恢复）
 - `POST /admin/applications/:id/restore`（恢复到撤销前状态，必须填写原因）
+- `POST /admin/applications/:id/subject`（调整稳定客户标识，保留原值和原因）
 
 兼容账号接口仍保留在 `/admin/pilot/accounts`。所有管理员接口只接受 `PILOT_ADMIN_TOKEN` Bearer 凭据。日志不得记录管理员 token、申请凭据、Pilot token、Tunnel Token 或激活密文。昵称/基本信息备注是管理员侧资料，不会作为申请人的审批备注发送给客户端。
 
-审核状态不是任意可编辑字段。拒绝纠正必须先重新进入 `pending`，再走批准流程；测试账号的撤销是可逆停用，可恢复到撤销前状态；授权到期时间可以直接编辑，不再限制为只能延期。所有管理员动作、基本信息修改和内部备注都会追加到 `pilot_admin_audit_events`。
+审核状态不是任意可编辑字段。批准时必须提供稳定的 `subjectId`；它代表管理员确认的客户归属，不是客户端随机昵称或可伪造指纹。同一 `subjectId` 只能保留一套 Cloudflare 资源，撤销或过期不会释放该槽位，必须执行 `retire` 并确认物理删除成功后才能批准替换申请。默认容量熔断是 180 个保留连接，可通过 `DASHOU_MAX_ACTIVE_RESOURCES` 调低。拒绝纠正必须先重新进入 `pending`，再走批准流程；测试账号的撤销是可逆停用，可恢复到撤销前状态；授权到期时间可以直接编辑，不再限制为只能延期。所有管理员动作、基本信息修改和内部备注都会追加到 `pilot_admin_audit_events`。
 
 诊断分析把 `first_seen` 明确解释为“支持该分析的客户端版本首次被观测到”，不把它当作安装时间。MCP 使用拆成首次连接、首次工具调用尝试、首次工具调用成功和首次工具调用失败（仅记录稳定错误类别）；本地事件先保存为 `pending`，服务端用事件 ID 幂等接收，确认后客户端再标记为 `sent`，重启会重试未确认事件。所有事件只记录状态、时间、版本和错误类别，不记录文件路径、文件内容、密码、Token 或对话内容。客户端事件在获得申请凭据后同步；未提交申请的安装不会出现在管理员统计中。
 

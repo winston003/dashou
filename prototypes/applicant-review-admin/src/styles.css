@@ -196,6 +196,12 @@ td span { color: var(--muted); line-height: 1.45; }
 .applicant-summary code { grid-column: 1 / -1; width: max-content; padding: 2px 5px; border-radius: 4px; background: #f2eee9; }
 .detail-section { padding: 17px 0; border-bottom: 1px solid var(--line); }
 .detail-section h3 { margin: 0 0 13px; font-size: 14px; }
+.related-section { display: grid; gap: 8px; }
+.related-application { display: grid; gap: 3px; width: 100%; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: #fffdf9; color: var(--ink); text-align: left; }
+.related-application:hover { border-color: var(--copper); background: #fff9f1; }
+.related-application strong { font-size: 12px; }
+.related-application span { overflow: hidden; color: var(--muted); font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; text-overflow: ellipsis; }
+.related-application small { color: #99611f; font-size: 10px; }
 dl { display: grid; gap: 11px; margin: 0; }
 dl div { display: grid; grid-template-columns: 98px 1fr; gap: 12px; }
 dt { color: var(--muted); font-size: 12px; }
@@ -271,6 +277,7 @@ dd { margin: 0; color: #493f38; font-size: 13px; line-height: 1.55; }
 .secondary-button, .danger-button { min-height: 42px; border: 1px solid var(--line-strong); border-radius: 8px; background: white; cursor: pointer; }
 .secondary-button:hover { background: #f7f2ed; }
 .modal-input { width: 100%; min-height: 42px; margin: 5px 0 12px; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: white; color: var(--ink); }
+.field-help { margin: -5px 0 13px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .danger-button { border-color: var(--red); background: var(--red); color: white; font-weight: 700; }
 .danger-button:hover { background: #a83e32; }
 .danger-button:disabled { cursor: not-allowed; opacity: .45; }

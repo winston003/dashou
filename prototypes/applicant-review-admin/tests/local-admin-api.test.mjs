@@ -33,7 +33,7 @@ test("allows only the application review route shapes", () => {
     method: "POST",
     upstreamPath: `/admin/applications/${applicationId}/reject`,
   });
-  for (const action of ["reopen", "period", "extend", "notes", "revoke", "restore", "authorization", "profile"]) {
+  for (const action of ["reopen", "period", "extend", "notes", "revoke", "retire", "restore", "authorization", "profile", "subject"]) {
     assert.deepEqual(resolveAdminRoute("POST", `/applications/${applicationId}/${action}`), {
       method: "POST",
       upstreamPath: `/admin/applications/${applicationId}/${action}`,

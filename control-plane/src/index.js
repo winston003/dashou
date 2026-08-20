@@ -13,6 +13,9 @@ const RESET_CONFIRMATION = "DELETE_ALL_DASHOU_PILOT_DATA";
 const CLIENT_EVENT_ID_PATTERN = /^evt_[A-Za-z0-9_-]{12,96}$/;
 const DEVICE_NICKNAME_PATTERN = /^搭手·[\p{L}\p{N}]{1,16}-\d{4}$/u;
 const DEVICE_FINGERPRINT_PATTERN = /^[A-F0-9]{4}-[A-F0-9]{4}$/;
+const SUBJECT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{2,63}$/;
+const RESOURCE_SLOT_STATES = new Set(["provisioning", "active", "needs_reconcile", "deleting", "delete_failed"]);
+const DEFAULT_MAX_ACTIVE_RESOURCES = 180;
 const CLIENT_EVENT_STAGES = new Set([
   "app_opened",
   "first_seen",
@@ -125,9 +128,17 @@ async function routeRequest(request, env) {
   if (revokeMatch && request.method === "POST") {
     return adminRevokeApplication(request, env, decodeURIComponent(revokeMatch[1]));
   }
+  const retireMatch = /^\/admin\/applications\/([^/]+)\/retire$/.exec(url.pathname);
+  if (retireMatch && request.method === "POST") {
+    return adminRetireApplication(request, env, decodeURIComponent(retireMatch[1]));
+  }
   const restoreMatch = /^\/admin\/applications\/([^/]+)\/restore$/.exec(url.pathname);
   if (restoreMatch && request.method === "POST") {
     return adminRestoreApplication(request, env, decodeURIComponent(restoreMatch[1]));
+  }
+  const subjectMatch = /^\/admin\/applications\/([^/]+)\/subject$/.exec(url.pathname);
+  if (subjectMatch && request.method === "POST") {
+    return adminSetApplicationSubject(request, env, decodeURIComponent(subjectMatch[1]));
   }
   const authorizationMatch = /^\/admin\/applications\/([^/]+)\/authorization$/.exec(url.pathname);
   if (authorizationMatch && request.method === "POST") {
@@ -221,13 +232,25 @@ async function recordApplicationEvents(request, env, applicationId) {
     const errorCode = event.errorCode == null ? null : limitedString(event.errorCode, "errorCode", 48);
     if (errorCode && !/^[A-Z0-9_]{3,48}$/.test(errorCode)) throw new HttpError(400, "event errorCode is invalid");
     const appVersion = limitedString(event.appVersion, "appVersion", 40);
+    const reportedDeviceNickname = event.deviceNickname == null
+      ? application.device_nickname ?? null
+      : limitedString(event.deviceNickname, "deviceNickname", 40);
+    if (reportedDeviceNickname && !DEVICE_NICKNAME_PATTERN.test(reportedDeviceNickname)) {
+      throw new HttpError(400, "event deviceNickname is invalid");
+    }
+    const reportedDeviceFingerprint = event.deviceFingerprint == null
+      ? application.device_fingerprint ?? null
+      : limitedString(event.deviceFingerprint, "deviceFingerprint", 20);
+    if (reportedDeviceFingerprint && !DEVICE_FINGERPRINT_PATTERN.test(reportedDeviceFingerprint)) {
+      throw new HttpError(400, "event deviceFingerprint is invalid");
+    }
     const clientUnixSeconds = Number(event.unixSeconds);
     if (!Number.isSafeInteger(clientUnixSeconds) || clientUnixSeconds < 1_600_000_000 || clientUnixSeconds > 4_102_444_800) {
       throw new HttpError(400, "event unixSeconds is invalid");
     }
     return env.DB.prepare(
       "INSERT OR IGNORE INTO pilot_client_events (application_id, event_id, stage, outcome, error_code, app_version, client_unix_seconds, received_at, device_nickname, device_fingerprint) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-    ).bind(applicationId, eventId, stage, outcome, errorCode, appVersion, clientUnixSeconds, receivedAt, application.device_nickname ?? null, application.device_fingerprint ?? null);
+    ).bind(applicationId, eventId, stage, outcome, errorCode, appVersion, clientUnixSeconds, receivedAt, reportedDeviceNickname, reportedDeviceFingerprint);
   });
   if (typeof env.DB.batch !== "function") throw new Error("D1 batch support is required");
   await env.DB.batch(statements);
@@ -272,11 +295,10 @@ async function adminApplicationList(request, env, url) {
   if (status && !["pending", "provisioning", "approved", "rejected", "activated", "expired", "revoked"].includes(status)) {
     throw new HttpError(400, "Invalid application status filter");
   }
-  const statement = status
-    ? env.DB.prepare("SELECT * FROM pilot_applications WHERE status = ?1 ORDER BY created_at").bind(status)
-    : env.DB.prepare("SELECT * FROM pilot_applications ORDER BY created_at");
-  const result = await statement.all();
-  return json({ applications: (result.results ?? []).map(adminApplicationSummary) });
+  const result = await env.DB.prepare("SELECT * FROM pilot_applications ORDER BY created_at").all();
+  const rows = result.results ?? [];
+  const visibleRows = status ? rows.filter((row) => row.status === status) : rows;
+  return json({ applications: visibleRows.map((row) => adminApplicationSummary(row, rows)) });
 }
 
 async function adminApplicationDetail(request, env, applicationId) {
@@ -284,14 +306,18 @@ async function adminApplicationDetail(request, env, applicationId) {
   validateApplicationId(applicationId);
   const row = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
   if (!row) throw new HttpError(404, `Application not found: ${applicationId}`);
-  const eventResult = await env.DB.prepare(
-    "SELECT event_id, stage, outcome, error_code, app_version, client_unix_seconds, received_at, device_nickname, device_fingerprint FROM pilot_client_events WHERE application_id = ?1 ORDER BY received_at, client_unix_seconds",
-  ).bind(applicationId).all();
-  const auditResult = await env.DB.prepare(
-    "SELECT audit_id, actor, action, from_status, to_status, from_period, to_period, reason, note, request_id, created_at FROM pilot_admin_audit_events WHERE application_id = ?1 ORDER BY created_at, audit_id",
-  ).bind(applicationId).all();
+  const [eventResult, auditResult, allApplications] = await Promise.all([
+    env.DB.prepare(
+      "SELECT event_id, stage, outcome, error_code, app_version, client_unix_seconds, received_at, device_nickname, device_fingerprint FROM pilot_client_events WHERE application_id = ?1 ORDER BY received_at, client_unix_seconds",
+    ).bind(applicationId).all(),
+    env.DB.prepare(
+      "SELECT audit_id, actor, action, from_status, to_status, from_period, to_period, reason, note, request_id, created_at FROM pilot_admin_audit_events WHERE application_id = ?1 ORDER BY created_at, audit_id",
+    ).bind(applicationId).all(),
+    env.DB.prepare("SELECT * FROM pilot_applications ORDER BY created_at").all(),
+  ]);
   return json({
-    application: adminApplicationSummary(row),
+    application: adminApplicationSummary(row, allApplications.results ?? []),
+    relatedApplications: relatedApplicationSummaries(row, allApplications.results ?? []),
     events: (eventResult.results ?? []).map((event) => ({
       eventId: event.event_id,
       stage: event.stage,
@@ -339,7 +365,7 @@ async function adminReset(request, env) {
     throw new HttpError(400, `confirm must equal ${RESET_CONFIRMATION}`);
   }
   const result = await env.DB.prepare(
-    "SELECT application_id, tunnel_id, hostname FROM pilot_applications WHERE tunnel_id IS NOT NULL OR hostname IS NOT NULL ORDER BY created_at",
+    "SELECT application_id, tunnel_id, hostname FROM pilot_applications WHERE deprovisioned_at IS NULL AND (tunnel_id IS NOT NULL OR hostname IS NOT NULL) ORDER BY created_at",
   ).all();
   const registeredDevices = (result.results ?? []).filter((row) => row.tunnel_id || row.hostname);
   const deprovisioner = typeof env.DEVICE_DEPROVISIONER === "function" ? env.DEVICE_DEPROVISIONER : deleteDeviceTunnel;
@@ -367,6 +393,7 @@ async function adminApproveApplication(request, env, applicationId) {
   const body = await jsonObject(request);
   const period = requiredString(body.period, "period");
   if (!PERIODS.has(period)) throw new HttpError(400, "period must be week, month, quarter or year");
+  const subjectId = normalizedSubjectId(body.subjectId);
   const current = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
   if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
   const recovering = current.status === "provisioning"
@@ -375,15 +402,40 @@ async function adminApproveApplication(request, env, applicationId) {
   if (current.status !== "pending" && !recovering) {
     throw new HttpError(409, `Application cannot be approved from status: ${current.status}`);
   }
+  if (current.subject_id && current.subject_id !== subjectId) {
+    throw new HttpError(409, `Application is already assigned to customer: ${current.subject_id}`);
+  }
+  const occupied = await env.DB.prepare(
+    "SELECT application_id, status, resource_state FROM pilot_applications WHERE subject_id = ?1 AND application_id <> ?2 AND resource_state IN ('provisioning', 'active', 'needs_reconcile', 'deleting', 'delete_failed') LIMIT 1",
+  ).bind(subjectId, applicationId).first();
+  if (occupied) {
+    throw new HttpError(409, `Customer ${subjectId} already owns a retained connection (${occupied.application_id}, ${occupied.resource_state}); retire it before approving a replacement`);
+  }
+  const hasCurrentSlot = current.subject_id === subjectId && RESOURCE_SLOT_STATES.has(current.resource_state);
+  if (!hasCurrentSlot) {
+    const resourceCount = await retainedResourceCount(env);
+    const resourceLimit = maxActiveResources(env.DASHOU_MAX_ACTIVE_RESOURCES);
+    if (resourceCount >= resourceLimit) {
+      throw new HttpError(409, `Connection capacity guard reached (${resourceCount}/${resourceLimit}); retire an unused connection before approving another`);
+    }
+  }
 
   const provisioningStartedAt = new Date().toISOString();
-  const claim = recovering
-    ? await env.DB.prepare(
-      "UPDATE pilot_applications SET provisioning_started_at = ?1, updated_at = ?1 WHERE application_id = ?2 AND status = 'provisioning' AND provisioning_started_at = ?3",
-    ).bind(provisioningStartedAt, applicationId, current.provisioning_started_at).run()
-    : await env.DB.prepare(
-      "UPDATE pilot_applications SET status = 'provisioning', provisioning_started_at = ?1, updated_at = ?1 WHERE application_id = ?2 AND status = 'pending'",
-    ).bind(provisioningStartedAt, applicationId).run();
+  let claim;
+  try {
+    claim = recovering
+      ? await env.DB.prepare(
+        "UPDATE pilot_applications SET subject_id = ?1, resource_state = 'provisioning', resource_error = NULL, provisioning_started_at = ?2, updated_at = ?2 WHERE application_id = ?3 AND status = 'provisioning' AND provisioning_started_at = ?4",
+      ).bind(subjectId, provisioningStartedAt, applicationId, current.provisioning_started_at).run()
+      : await env.DB.prepare(
+        "UPDATE pilot_applications SET status = 'provisioning', subject_id = ?1, resource_state = 'provisioning', resource_error = NULL, provisioning_started_at = ?2, updated_at = ?2 WHERE application_id = ?3 AND status = 'pending'",
+      ).bind(subjectId, provisioningStartedAt, applicationId).run();
+  } catch (error) {
+    if (errorMessage(error).toLowerCase().includes("unique constraint")) {
+      throw new HttpError(409, `Customer ${subjectId} acquired another connection while this approval was being processed; refresh and inspect related applications`);
+    }
+    throw error;
+  }
   if (!changed(claim)) throw new HttpError(409, "Application is already being processed");
 
   try {
@@ -412,21 +464,22 @@ async function adminApproveApplication(request, env, applicationId) {
         "INSERT INTO pilot_accounts (account_id, token_hash, enabled, expires_at, created_at) VALUES (?1, ?2, 1, ?3, ?4)",
       ).bind(accountId, await sha256Base64Url(pilotToken), expiresAt, approvedAtText),
       env.DB.prepare(
-        "UPDATE pilot_applications SET status = 'approved', period = ?1, account_id = ?2, tunnel_id = ?3, hostname = ?4, activation_ciphertext = ?5, approved_at = ?6, expires_at = ?7, updated_at = ?6 WHERE application_id = ?8 AND status = 'provisioning'",
+        "UPDATE pilot_applications SET status = 'approved', resource_state = 'active', resource_error = NULL, period = ?1, account_id = ?2, tunnel_id = ?3, hostname = ?4, activation_ciphertext = ?5, approved_at = ?6, expires_at = ?7, updated_at = ?6 WHERE application_id = ?8 AND status = 'provisioning'",
       ).bind(period, accountId, requiredString(provisioned.tunnelId, "provisioned tunnelId"), requiredString(provisioned.hostname, "provisioned hostname"), activationCiphertext, approvedAtText, expiresAt, applicationId),
     ];
     statements.push(auditStatement(env, applicationId, "approved", auditContext(env, approvedAtText), {
       fromStatus: current.status === "provisioning" ? "pending" : current.status,
       toStatus: "approved",
       toPeriod: period,
+      note: `customer: ${subjectId}`,
     }));
     if (typeof env.DB.batch !== "function") throw new Error("D1 batch support is required");
     await env.DB.batch(statements);
     return json({ applicationId, status: "approved", period, approvedAt: approvedAtText, expiresAt, mcpUrl: new URL("/mcp", publicBaseUrl).toString() });
   } catch (error) {
     await env.DB.prepare(
-      "UPDATE pilot_applications SET status = 'pending', provisioning_started_at = NULL, updated_at = ?1 WHERE application_id = ?2 AND status = 'provisioning'",
-    ).bind(new Date().toISOString(), applicationId).run();
+      "UPDATE pilot_applications SET status = 'pending', resource_state = 'needs_reconcile', resource_error = ?1, provisioning_started_at = NULL, updated_at = ?2 WHERE application_id = ?3 AND status = 'provisioning'",
+    ).bind(safeResourceError(error), new Date().toISOString(), applicationId).run();
     console.error(JSON.stringify({ event: "device_provision_failed", applicationId, message: errorMessage(error) }));
     throw new HttpError(502, "Device connection could not be prepared; check control-plane logs and retry");
   }
@@ -576,6 +629,63 @@ async function adminRevokeApplication(request, env, applicationId) {
   return json({ applicationId, status: "revoked", revokedAt: now, ...(reason ? { reason } : {}) });
 }
 
+async function adminRetireApplication(request, env, applicationId) {
+  requireAdmin(request, env);
+  validateApplicationId(applicationId);
+  const body = await jsonObject(request);
+  const reason = limitedString(body.reason, "reason", 300);
+  const current = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
+  if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
+  if (current.deprovisioned_at || current.resource_state === "deleted") {
+    throw new HttpError(409, "Application connection has already been retired");
+  }
+  if (!current.tunnel_id || !current.hostname || !current.account_id) {
+    throw new HttpError(409, "Application does not have a complete retained connection to retire");
+  }
+  if (!["approved", "activated", "expired", "revoked"].includes(current.status)) {
+    throw new HttpError(409, `Application connection cannot be retired from status: ${current.status}`);
+  }
+  const startedAt = new Date().toISOString();
+  const fromStatus = current.status;
+  await env.DB.batch([
+    env.DB.prepare("UPDATE pilot_accounts SET enabled = 0, revoked_at = COALESCE(revoked_at, ?1) WHERE account_id = ?2").bind(startedAt, current.account_id),
+    env.DB.prepare("UPDATE pilot_applications SET status = 'revoked', revoked_at = COALESCE(revoked_at, ?1), revoked_from_status = COALESCE(revoked_from_status, ?2), resource_state = 'deleting', resource_error = NULL, updated_at = ?1 WHERE application_id = ?3").bind(startedAt, fromStatus, applicationId),
+    auditStatement(env, applicationId, "retirement_started", auditContext(env, startedAt), {
+      fromStatus,
+      toStatus: "revoked",
+      reason,
+      note: "Cloudflare Tunnel and DNS retirement started",
+    }),
+  ]);
+  const deprovisioner = typeof env.DEVICE_DEPROVISIONER === "function" ? env.DEVICE_DEPROVISIONER : deleteDeviceTunnel;
+  try {
+    const result = await deprovisioner(env, { tunnelId: current.tunnel_id, hostname: current.hostname });
+    const completedAt = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE pilot_applications SET resource_state = 'deleted', resource_error = NULL, deprovisioned_at = ?1, updated_at = ?1 WHERE application_id = ?2 AND resource_state = 'deleting'").bind(completedAt, applicationId),
+      auditStatement(env, applicationId, "retired", auditContext(env, completedAt), {
+        fromStatus: "revoked",
+        toStatus: "revoked",
+        reason,
+        note: `Cloudflare connection retired; DNS records deleted: ${Number(result?.deletedDnsRecords ?? 0)}`,
+      }),
+    ]);
+    return json({ applicationId, status: "revoked", resourceState: "deleted", retiredAt: completedAt });
+  } catch (error) {
+    const failedAt = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE pilot_applications SET resource_state = 'delete_failed', resource_error = ?1, updated_at = ?2 WHERE application_id = ?3 AND resource_state = 'deleting'").bind(safeResourceError(error), failedAt, applicationId),
+      auditStatement(env, applicationId, "retirement_failed", auditContext(env, failedAt), {
+        fromStatus: "revoked",
+        toStatus: "revoked",
+        reason,
+        note: "Cloudflare connection retirement requires reconciliation",
+      }),
+    ]);
+    throw new HttpError(502, "Connection was disabled, but Cloudflare cleanup failed; the customer slot remains blocked until reconciliation succeeds");
+  }
+}
+
 async function adminRestoreApplication(request, env, applicationId) {
   requireAdmin(request, env);
   validateApplicationId(applicationId);
@@ -584,6 +694,12 @@ async function adminRestoreApplication(request, env, applicationId) {
   const current = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
   if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
   if (current.status !== "revoked") throw new HttpError(409, `Only a revoked application can be restored: ${current.status}`);
+  if (current.deprovisioned_at || current.resource_state === "deleted") {
+    throw new HttpError(409, "The Cloudflare connection was physically retired; reopen or submit a replacement application instead");
+  }
+  if (["deleting", "delete_failed", "needs_reconcile"].includes(current.resource_state)) {
+    throw new HttpError(409, `Application connection must be reconciled before restore: ${current.resource_state}`);
+  }
   const restoredStatus = current.revoked_from_status || (current.activated_at ? "activated" : "approved");
   if (!["approved", "activated", "expired"].includes(restoredStatus)) {
     throw new HttpError(409, `Revoked application has no restorable status: ${restoredStatus}`);
@@ -668,6 +784,37 @@ async function adminEditApplicationProfile(request, env, applicationId) {
   return json({ applicationId, nickname, profileNote, updatedAt: now });
 }
 
+async function adminSetApplicationSubject(request, env, applicationId) {
+  requireAdmin(request, env);
+  validateApplicationId(applicationId);
+  const body = await jsonObject(request);
+  const subjectId = normalizedSubjectId(body.subjectId);
+  const reason = limitedString(body.reason, "reason", 300);
+  const current = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
+  if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
+  if (current.subject_id === subjectId) throw new HttpError(409, "The customer identity is unchanged");
+  if (["provisioning", "deleting"].includes(current.resource_state)) {
+    throw new HttpError(409, `Customer identity cannot change while resource state is ${current.resource_state}`);
+  }
+  if (RESOURCE_SLOT_STATES.has(current.resource_state)) {
+    const occupied = await env.DB.prepare(
+      "SELECT application_id, resource_state FROM pilot_applications WHERE subject_id = ?1 AND application_id <> ?2 AND resource_state IN ('provisioning', 'active', 'needs_reconcile', 'deleting', 'delete_failed') LIMIT 1",
+    ).bind(subjectId, applicationId).first();
+    if (occupied) throw new HttpError(409, `Customer ${subjectId} already owns retained connection ${occupied.application_id}`);
+  }
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE pilot_applications SET subject_id = ?1, updated_at = ?2 WHERE application_id = ?3").bind(subjectId, now, applicationId),
+    auditStatement(env, applicationId, "subject_changed", auditContext(env, now), {
+      fromStatus: current.status,
+      toStatus: current.status,
+      reason,
+      note: `customer: ${current.subject_id || "unassigned"} -> ${subjectId}`,
+    }),
+  ]);
+  return json({ applicationId, subjectId, changedAt: now });
+}
+
 async function authorizedApplication(request, env, applicationId) {
   validateApplicationId(applicationId);
   const token = bearerToken(request);
@@ -705,7 +852,8 @@ function applicationStatusSummary(row) {
   };
 }
 
-function adminApplicationSummary(row) {
+function adminApplicationSummary(row, allRows = []) {
+  const related = relatedApplicationSummaries(row, allRows);
   return {
     ...applicationStatusSummary(row),
     deviceId: row.device_id,
@@ -717,10 +865,67 @@ function adminApplicationSummary(row) {
     platform: row.platform,
     ...(row.contact ? { contact: row.contact } : {}),
     ...(row.account_id ? { accountId: row.account_id } : {}),
+    ...(row.subject_id ? { subjectId: row.subject_id } : {}),
+    ...(row.resource_state ? { resourceState: row.resource_state } : {}),
+    ...(row.resource_error ? { resourceError: row.resource_error } : {}),
+    ...(row.deprovisioned_at ? { deprovisionedAt: row.deprovisioned_at } : {}),
+    duplicateRisk: related.length > 0,
+    relatedApplicationIds: related.map((application) => application.applicationId),
     ...(row.provisioning_started_at ? { provisioningStartedAt: row.provisioning_started_at } : {}),
     ...(row.activation_started_at ? { activationStartedAt: row.activation_started_at } : {}),
     ...(row.updated_at ? { updatedAt: row.updated_at } : {}),
   };
+}
+
+function relatedApplicationSummaries(row, allRows) {
+  const contact = row.contact?.trim().toLowerCase();
+  return allRows
+    .filter((candidate) => candidate.application_id !== row.application_id)
+    .map((candidate) => {
+      const signals = [];
+      if (row.subject_id && candidate.subject_id === row.subject_id) signals.push("same_customer");
+      if (row.device_fingerprint && candidate.device_fingerprint === row.device_fingerprint) signals.push("same_fingerprint");
+      if (contact && candidate.contact?.trim().toLowerCase() === contact) signals.push("same_contact");
+      return signals.length ? { candidate, signals } : null;
+    })
+    .filter(Boolean)
+    .map(({ candidate, signals }) => ({
+      applicationId: candidate.application_id,
+      status: candidate.status,
+      deviceName: candidate.device_name,
+      ...(candidate.subject_id ? { subjectId: candidate.subject_id } : {}),
+      ...(candidate.resource_state ? { resourceState: candidate.resource_state } : {}),
+      signals,
+    }));
+}
+
+async function retainedResourceCount(env) {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM pilot_applications WHERE resource_state IN ('provisioning', 'active', 'needs_reconcile', 'deleting', 'delete_failed')",
+  ).first();
+  return Number(row?.count ?? 0);
+}
+
+function maxActiveResources(value) {
+  if (value === undefined || value === "") return DEFAULT_MAX_ACTIVE_RESOURCES;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 10_000) {
+    throw new Error("DASHOU_MAX_ACTIVE_RESOURCES must be an integer between 1 and 10000");
+  }
+  return parsed;
+}
+
+function normalizedSubjectId(value) {
+  const subjectId = requiredString(value, "subjectId").toLowerCase();
+  if (!SUBJECT_ID_PATTERN.test(subjectId)) {
+    throw new HttpError(400, "subjectId must be 3-64 lowercase characters using letters, numbers, dot, underscore or hyphen");
+  }
+  return subjectId;
+}
+
+function safeResourceError(error) {
+  const message = errorMessage(error).replace(/[^A-Za-z0-9 _.:/-]/g, "").slice(0, 160);
+  return message || "provider error";
 }
 
 async function pilotPolicy(request, env) {

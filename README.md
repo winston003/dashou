@@ -111,7 +111,7 @@ npm run verify:pilot
 
 ```bash
 dashou admin applications list
-dashou admin applications approve req_xxx --period month
+dashou admin applications approve req_xxx --period month --subject customer-alice
 ```
 
 `week`、`month`、`quarter`、`year` 是授权周期。旧版邀请文件只作为兼容和故障恢复入口保留：

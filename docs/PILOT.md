@@ -19,14 +19,14 @@ npm run pilot:admin:setup
 
 ```bash
 dashou admin applications list
-dashou admin applications approve req_xxx --period month
+dashou admin applications approve req_xxx --period month --subject customer-alice
 ```
 
 如果直接使用仓库而不是已安装的 `dashou` 命令，对应写法是：
 
 ```bash
 npm run pilot:admin -- applications list
-npm run pilot:admin -- applications approve req_xxx --period month
+npm run pilot:admin -- applications approve req_xxx --period month --subject customer-alice
 ```
 
 也可以选择 `week`、`quarter` 或 `year`。这些是授权周期，不是假装已经完成支付。拒绝和撤销：
@@ -34,7 +34,10 @@ npm run pilot:admin -- applications approve req_xxx --period month
 ```bash
 dashou admin applications reject req_xxx --reason '请联系客服核对设备'
 dashou admin applications revoke req_xxx
+dashou admin applications retire req_xxx --reason '同一客户改用新的申请'
 ```
+
+`--subject` 是管理员维护的稳定客户标识。同一客户重装、清理本地或更换设备后必须继续使用相同标识；控制面会阻止该客户同时占用第二套 Tunnel/DNS。`revoke` 只做可逆停用，不释放 Cloudflare 配额；确认不再使用时才执行 `retire`。
 
 管理员不接触用户的本地连接密码，也不把 Tunnel Token、试用 token 或其他密钥发到聊天里。
 

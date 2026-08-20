@@ -122,7 +122,7 @@ test("device application can be approved, safely activated, confirmed and revoke
   const approve = await request("POST", `/admin/applications/${created.applicationId}/approve`, {
     env,
     token: ADMIN_TOKEN,
-    body: { period: "month" },
+    body: { period: "month", subjectId: "customer-alice" },
   });
   assert.equal(approve.status, 200, JSON.stringify(await approve.clone().json()));
   const approved = await approve.json();
@@ -281,7 +281,7 @@ test("admin can change a not-yet-activated period, append notes and audit both",
     },
   });
   const created = await create.json();
-  await request("POST", `/admin/applications/${created.applicationId}/approve`, { env, token: ADMIN_TOKEN, body: { period: "week" } });
+  await request("POST", `/admin/applications/${created.applicationId}/approve`, { env, token: ADMIN_TOKEN, body: { period: "week", subjectId: "customer-period" } });
   const changed = await request("POST", `/admin/applications/${created.applicationId}/period`, {
     env,
     token: ADMIN_TOKEN,
@@ -324,7 +324,7 @@ test("admin can restore a revoked test account, edit its date, nickname and prof
     body: { applicationToken, deviceId: `dev_${"v".repeat(24)}`, deviceName: "Test Windows", platform: "windows-x86_64" },
   });
   const created = await create.json();
-  await request("POST", `/admin/applications/${created.applicationId}/approve`, { env, token: ADMIN_TOKEN, body: { period: "week" } });
+  await request("POST", `/admin/applications/${created.applicationId}/approve`, { env, token: ADMIN_TOKEN, body: { period: "week", subjectId: "customer-reversible" } });
   const profile = await request("POST", `/admin/applications/${created.applicationId}/profile`, {
     env,
     token: ADMIN_TOKEN,
@@ -413,6 +413,8 @@ test("client progress signals are authenticated, deduplicated and visible to the
     outcome: "ok",
     appVersion: "0.1.3-rc.12",
     unixSeconds: 1_786_838_400,
+    deviceNickname: "搭手·小麦-2045",
+    deviceFingerprint: "0511-0713",
   }, {
     eventId: "evt_qrstuvwxyz12345",
     stage: "application_submitted",
@@ -449,8 +451,8 @@ test("client progress signals are authenticated, deduplicated and visible to the
   const payload = await detail.json();
   assert.equal(payload.events.length, 4);
   assert.equal(payload.events[0].stage, "app_opened");
-  assert.equal(payload.events[0].deviceNickname, "搭手·薄荷-1304");
-  assert.equal(payload.events[0].deviceFingerprint, "1A2B-3C4D");
+  assert.equal(payload.events[0].deviceNickname, "搭手·小麦-2045");
+  assert.equal(payload.events[0].deviceFingerprint, "0511-0713");
   assert.equal(payload.events[2].stage, "update_install_started");
   assert.equal(payload.events[3].stage, "update_install_failed");
   assert.equal(JSON.stringify(payload).includes(applicationToken), false);
@@ -477,10 +479,100 @@ test("failed device provisioning returns the application to pending for a safe r
   const approve = await request("POST", `/admin/applications/${created.applicationId}/approve`, {
     env,
     token: ADMIN_TOKEN,
-    body: { period: "week" },
+    body: { period: "week", subjectId: "customer-retry" },
   });
   assert.equal(approve.status, 502);
   assert.equal(db.applications.get(created.applicationId).status, "pending");
+  assert.equal(db.applications.get(created.applicationId).resource_state, "needs_reconcile");
+});
+
+test("one customer cannot retain multiple connections and physical retirement frees the slot", async () => {
+  const db = new FakeD1();
+  const provisioned = [];
+  const deleted = [];
+  const env = {
+    DB: db,
+    PILOT_ADMIN_TOKEN: ADMIN_TOKEN,
+    PILOT_LEASE_PUBLIC_KEY: publicKeyPem,
+    DASHOU_ACTIVATION_KEY: ACTIVATION_KEY,
+    DASHOU_CONTROL_PUBLIC_URL: "https://control.example",
+    DEVICE_PROVISIONER: async (_env, application) => {
+      provisioned.push(application.applicationId);
+      return {
+        tunnelId: `tunnel-${application.applicationId}`,
+        tunnelToken: "cloudflare-tunnel-secret-for-device",
+        hostname: `${application.applicationId}.warmbyte.studio`,
+        publicBaseUrl: `https://${application.applicationId}.warmbyte.studio`,
+      };
+    },
+    DEVICE_DEPROVISIONER: async (_env, device) => {
+      deleted.push(device);
+      return { ...device, deletedDnsRecords: 1 };
+    },
+  };
+  const first = await createTestApplication(env, "J", "j", "搭手·晚风-2513", "D96A-5988");
+  const second = await createTestApplication(env, "K", "k", "搭手·月牙-9165", "AD1E-33A1");
+  const approveFirst = await request("POST", `/admin/applications/${first.applicationId}/approve`, {
+    env,
+    token: ADMIN_TOKEN,
+    body: { period: "month", subjectId: "customer-wanfeng" },
+  });
+  assert.equal(approveFirst.status, 200);
+  const duplicate = await request("POST", `/admin/applications/${second.applicationId}/approve`, {
+    env,
+    token: ADMIN_TOKEN,
+    body: { period: "month", subjectId: "customer-wanfeng" },
+  });
+  assert.equal(duplicate.status, 409);
+  assert.equal(provisioned.length, 1);
+
+  await request("POST", `/admin/applications/${first.applicationId}/revoke`, { env, token: ADMIN_TOKEN, body: { reason: "暂停" } });
+  const stillBlocked = await request("POST", `/admin/applications/${second.applicationId}/approve`, {
+    env,
+    token: ADMIN_TOKEN,
+    body: { period: "month", subjectId: "customer-wanfeng" },
+  });
+  assert.equal(stillBlocked.status, 409);
+
+  const retired = await request("POST", `/admin/applications/${first.applicationId}/retire`, {
+    env,
+    token: ADMIN_TOKEN,
+    body: { reason: "同一客户清理本地后改用新申请" },
+  });
+  assert.equal(retired.status, 200, JSON.stringify(await retired.clone().json()));
+  assert.equal(db.applications.get(first.applicationId).resource_state, "deleted");
+  assert.equal(deleted.length, 1);
+
+  const replacement = await request("POST", `/admin/applications/${second.applicationId}/approve`, {
+    env,
+    token: ADMIN_TOKEN,
+    body: { period: "month", subjectId: "customer-wanfeng" },
+  });
+  assert.equal(replacement.status, 200, JSON.stringify(await replacement.clone().json()));
+  assert.equal(provisioned.length, 2);
+});
+
+test("global connection capacity guard fails closed before Cloudflare provisioning", async () => {
+  const db = new FakeD1();
+  let provisionCalls = 0;
+  const env = {
+    DB: db,
+    PILOT_ADMIN_TOKEN: ADMIN_TOKEN,
+    PILOT_LEASE_PUBLIC_KEY: publicKeyPem,
+    DASHOU_ACTIVATION_KEY: ACTIVATION_KEY,
+    DASHOU_CONTROL_PUBLIC_URL: "https://control.example",
+    DASHOU_MAX_ACTIVE_RESOURCES: "1",
+    DEVICE_PROVISIONER: async (_env, application) => {
+      provisionCalls += 1;
+      return { tunnelId: `tunnel-${application.applicationId}`, tunnelToken: "token-token-token-token", hostname: `${application.applicationId}.warmbyte.studio`, publicBaseUrl: `https://${application.applicationId}.warmbyte.studio` };
+    },
+  };
+  const first = await createTestApplication(env, "L", "l", "搭手·青柠-1236", "3CC7-1313");
+  const second = await createTestApplication(env, "M", "m", "搭手·晚风-2513", "D96A-5988");
+  assert.equal((await request("POST", `/admin/applications/${first.applicationId}/approve`, { env, token: ADMIN_TOKEN, body: { period: "week", subjectId: "customer-one" } })).status, 200);
+  const blocked = await request("POST", `/admin/applications/${second.applicationId}/approve`, { env, token: ADMIN_TOKEN, body: { period: "week", subjectId: "customer-two" } });
+  assert.equal(blocked.status, 409);
+  assert.equal(provisionCalls, 1);
 });
 
 test("new device applications are rate limited without blocking idempotent retries", async () => {
@@ -627,6 +719,22 @@ test("admin analytics exposes funnel and client failure coverage", async () => {
   assert.equal(payload.errors[0].errorCode, "RUNTIME_START_FAILED");
 });
 
+async function createTestApplication(env, tokenCharacter, deviceCharacter, deviceNickname, deviceFingerprint) {
+  const response = await request("POST", "/applications", {
+    env,
+    body: {
+      applicationToken: tokenCharacter.repeat(43),
+      deviceId: `dev_${deviceCharacter.repeat(24)}`,
+      deviceName: deviceNickname,
+      deviceNickname,
+      deviceFingerprint,
+      platform: "macos-aarch64",
+    },
+  });
+  assert.equal(response.status, 201);
+  return response.json();
+}
+
 function testKeyPair() {
   const pair = generateKeyPairSync("rsa", { modulusLength: 2048 });
   return {
@@ -697,6 +805,16 @@ class FakeStatement {
       return { attempts: this.db.rateLimits.get(`${this.values[0]}.${this.values[1]}`) ?? 0 };
     }
     if (this.sql.includes("FROM pilot_applications")) {
+      if (this.sql.includes("COUNT(*) AS count")) {
+        return { count: [...this.db.applications.values()].filter((row) => ["provisioning", "active", "needs_reconcile", "deleting", "delete_failed"].includes(row.resource_state)).length };
+      }
+      if (this.sql.includes("WHERE subject_id = ?1") && this.sql.includes("application_id <> ?2")) {
+        return [...this.db.applications.values()].find((row) =>
+          row.subject_id === this.values[0]
+          && row.application_id !== this.values[1]
+          && ["provisioning", "active", "needs_reconcile", "deleting", "delete_failed"].includes(row.resource_state)
+        ) ?? null;
+      }
       if (this.sql.includes("WHERE device_id")) {
         return [...this.db.applications.values()].find((row) =>
           row.device_id === this.values[0] && ["pending", "provisioning", "approved", "activated"].includes(row.status)
@@ -818,6 +936,10 @@ class FakeStatement {
         revoked_at: null,
         revoked_from_status: null,
         provisioning_started_at: null,
+        subject_id: null,
+        resource_state: null,
+        resource_error: null,
+        deprovisioned_at: null,
         created_at: createdAt,
         updated_at: createdAt,
       });
@@ -873,27 +995,35 @@ class FakeStatement {
       return result(1);
     }
     if (this.sql.includes("SET status = 'provisioning'")) {
-      const [startedAt, applicationId] = this.values;
+      const [subjectId, startedAt, applicationId] = this.values;
       const row = this.db.applications.get(applicationId);
       if (!row || row.status !== "pending") return result(0);
       row.status = "provisioning";
+      row.subject_id = subjectId;
+      row.resource_state = "provisioning";
+      row.resource_error = null;
       row.provisioning_started_at = startedAt;
       row.updated_at = startedAt;
       return result(1);
     }
     if (this.sql.includes("SET provisioning_started_at") && this.sql.includes("status = 'provisioning'")) {
-      const [startedAt, applicationId, expectedStartedAt] = this.values;
+      const [subjectId, startedAt, applicationId, expectedStartedAt] = this.values;
       const row = this.db.applications.get(applicationId);
       if (!row || row.status !== "provisioning" || row.provisioning_started_at !== expectedStartedAt) return result(0);
+      row.subject_id = subjectId;
+      row.resource_state = "provisioning";
+      row.resource_error = null;
       row.provisioning_started_at = startedAt;
       row.updated_at = startedAt;
       return result(1);
     }
     if (this.sql.includes("SET status = 'pending'") && !this.sql.includes("rejected_at = NULL")) {
-      const [updatedAt, applicationId] = this.values;
+      const [resourceError, updatedAt, applicationId] = this.values;
       const row = this.db.applications.get(applicationId);
       if (!row || row.status !== "provisioning") return result(0);
       row.status = "pending";
+      row.resource_state = "needs_reconcile";
+      row.resource_error = resourceError;
       row.provisioning_started_at = null;
       row.updated_at = updatedAt;
       return result(1);
@@ -902,7 +1032,7 @@ class FakeStatement {
       const [period, accountId, tunnelId, hostname, ciphertext, approvedAt, expiresAt, applicationId] = this.values;
       const row = this.db.applications.get(applicationId);
       if (!row || row.status !== "provisioning") return result(0);
-      Object.assign(row, { status: "approved", period, account_id: accountId, tunnel_id: tunnelId, hostname, activation_ciphertext: ciphertext, approved_at: approvedAt, expires_at: expiresAt, updated_at: approvedAt });
+      Object.assign(row, { status: "approved", resource_state: "active", resource_error: null, period, account_id: accountId, tunnel_id: tunnelId, hostname, activation_ciphertext: ciphertext, approved_at: approvedAt, expires_at: expiresAt, updated_at: approvedAt });
       return result(1);
     }
     if (this.sql.includes("SET activation_started_at")) {
@@ -951,11 +1081,46 @@ class FakeStatement {
       Object.assign(row, { expires_at: expiresAt, updated_at: updatedAt });
       return result(1);
     }
+    if (this.sql.includes("SET status = 'revoked'") && this.sql.includes("resource_state = 'deleting'")) {
+      const [revokedAt, revokedFromStatus, applicationId] = this.values;
+      const row = this.db.applications.get(applicationId);
+      if (!row) return result(0);
+      Object.assign(row, {
+        status: "revoked",
+        revoked_at: row.revoked_at ?? revokedAt,
+        revoked_from_status: row.revoked_from_status ?? revokedFromStatus,
+        resource_state: "deleting",
+        resource_error: null,
+        updated_at: revokedAt,
+      });
+      return result(1);
+    }
+    if (this.sql.includes("resource_state = 'deleted'")) {
+      const [deprovisionedAt, applicationId] = this.values;
+      const row = this.db.applications.get(applicationId);
+      if (!row || row.resource_state !== "deleting") return result(0);
+      Object.assign(row, { resource_state: "deleted", resource_error: null, deprovisioned_at: deprovisionedAt, updated_at: deprovisionedAt });
+      return result(1);
+    }
+    if (this.sql.includes("resource_state = 'delete_failed'")) {
+      const [resourceError, updatedAt, applicationId] = this.values;
+      const row = this.db.applications.get(applicationId);
+      if (!row || row.resource_state !== "deleting") return result(0);
+      Object.assign(row, { resource_state: "delete_failed", resource_error: resourceError, updated_at: updatedAt });
+      return result(1);
+    }
     if (this.sql.includes("SET status = 'revoked'")) {
       const [revokedAt, revokedFromStatus, applicationId] = this.values;
       const row = this.db.applications.get(applicationId);
       if (!row) return result(0);
       Object.assign(row, { status: "revoked", revoked_at: revokedAt, revoked_from_status: revokedFromStatus, updated_at: revokedAt });
+      return result(1);
+    }
+    if (this.sql.includes("SET subject_id = ?1, updated_at = ?2")) {
+      const [subjectId, updatedAt, applicationId] = this.values;
+      const row = this.db.applications.get(applicationId);
+      if (!row) return result(0);
+      Object.assign(row, { subject_id: subjectId, updated_at: updatedAt });
       return result(1);
     }
     if (this.sql.includes("SET status = ?1, revoked_at = NULL")) {

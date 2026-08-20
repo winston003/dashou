@@ -157,7 +157,7 @@ export function resolveAdminRoute(method = "GET", requestUrl = "/") {
     return { method: "GET", upstreamPath: `/admin/applications/${encodeURIComponent(detailMatch[1])}` };
   }
 
-  const actionMatch = /^\/applications\/([^/]+)\/(approve|reject|reopen|period|extend|notes|revoke|restore|authorization|profile)$/.exec(pathname);
+  const actionMatch = /^\/applications\/([^/]+)\/(approve|reject|reopen|period|extend|notes|revoke|retire|restore|authorization|profile|subject)$/.exec(pathname);
   if (normalizedMethod === "POST" && actionMatch && isApplicationId(actionMatch[1]) && !url.search) {
     return {
       method: "POST",
