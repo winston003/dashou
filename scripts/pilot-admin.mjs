@@ -173,7 +173,8 @@ function printApplicationTimeline(application, events) {
 function eventLabel(stage) {
   return ({
     app_opened: "打开客户端",
-    first_launch: "首次启动（安装近似）",
+    first_seen: "首次被分析版本观测到",
+    first_launch: "首次启动（旧版事件）",
     application_submit_started: "点击申请",
     application_submitted: "申请发送成功",
     application_submit_failed: "申请发送失败",
@@ -185,7 +186,11 @@ function eventLabel(stage) {
     runtime_start_failed: "本地服务启动失败",
     chatgpt_opened: "前往 ChatGPT",
     connection_password_copied: "复制授权密码",
-    first_mcp_use: "首次真实使用（MCP 工具调用）",
+    first_mcp_connection: "首次 MCP 连接",
+    first_tool_call_attempt: "首次工具调用尝试",
+    first_tool_call_success: "首次工具调用成功",
+    first_tool_call_failure: "首次工具调用失败",
+    first_mcp_use: "首次 MCP 工具调用（旧版事件）",
   })[stage] || stage;
 }
 

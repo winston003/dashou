@@ -89,7 +89,7 @@ dashou admin applications revoke req_xxx
 管理员接口：
 
 - `GET /admin/applications?status=pending`
-- `GET /admin/analytics`（安装近似→首次真实使用漏斗、阶段耗时、错误排行和超时卡点）
+- `GET /admin/analytics`（申请→批准→开通→MCP 连接→工具尝试→工具成功漏斗、阶段耗时、错误排行和超时卡点）
 - `GET /admin/applications/:id`（包含客户端事件和管理员审计事件）
 - `POST /admin/applications/:id/approve`
 - `POST /admin/applications/:id/reject`
@@ -106,6 +106,6 @@ dashou admin applications revoke req_xxx
 
 审核状态不是任意可编辑字段。拒绝纠正必须先重新进入 `pending`，再走批准流程；测试账号的撤销是可逆停用，可恢复到撤销前状态；授权到期时间可以直接编辑，不再限制为只能延期。所有管理员动作、基本信息修改和内部备注都会追加到 `pilot_admin_audit_events`。
 
-诊断分析使用 `first_launch` 作为安装近似时间，使用第一次真实 MCP `tools/call` 的 `first_mcp_use` 作为首次使用时间。两者都只记录状态、时间、版本和错误类别，不记录文件路径、文件内容、密码、Token 或对话内容。客户端事件在获得申请凭据后批量同步；未提交申请的安装不会出现在管理员统计中。
+诊断分析把 `first_seen` 明确解释为“支持该分析的客户端版本首次被观测到”，不把它当作安装时间。MCP 使用拆成首次连接、首次工具调用尝试、首次工具调用成功和首次工具调用失败（仅记录稳定错误类别）；本地事件先保存为 `pending`，服务端用事件 ID 幂等接收，确认后客户端再标记为 `sent`，重启会重试未确认事件。所有事件只记录状态、时间、版本和错误类别，不记录文件路径、文件内容、密码、Token 或对话内容。客户端事件在获得申请凭据后同步；未提交申请的安装不会出现在管理员统计中。
 
 部署上线不等于用户验收。上线后仍要分别验证 D1 migration、Worker `/healthz`、真实 Tunnel/DNS、外部 HTTPS、桌面领取、ChatGPT OAuth 和第一个真实本地任务。

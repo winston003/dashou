@@ -49,7 +49,8 @@ const periodOptions = [
 
 const eventLabels = {
   app_opened: "打开客户端",
-  first_launch: "首次启动（安装近似）",
+  first_seen: "首次被分析版本观测到",
+  first_launch: "首次启动（旧版事件）",
   application_submit_started: "点击申请",
   application_submitted: "申请发送成功",
   application_submit_failed: "申请发送失败",
@@ -62,7 +63,11 @@ const eventLabels = {
   chatgpt_opened: "前往 ChatGPT",
   connection_password_copied: "复制授权密码",
   notification_enabled: "已开启准备完成提醒",
-  first_mcp_use: "首次真实使用（MCP 工具调用）",
+  first_mcp_connection: "首次 MCP 连接",
+  first_tool_call_attempt: "首次工具调用尝试",
+  first_tool_call_success: "首次工具调用成功",
+  first_tool_call_failure: "首次工具调用失败",
+  first_mcp_use: "首次 MCP 工具调用（旧版事件）",
 };
 
 const auditLabels = {
@@ -723,10 +728,10 @@ export function App() {
 
 function AnalyticsPanel({ analytics, loading, error }) {
   if (loading) {
-    return <section className="analytics-panel analytics-loading" aria-label="安装到首次使用分析"><ArrowClockwise className="spin" size={18} />正在计算安装到首次使用的漏斗…</section>;
+    return <section className="analytics-panel analytics-loading" aria-label="申请到首次工具成功分析"><ArrowClockwise className="spin" size={18} />正在计算申请到首次工具成功的漏斗…</section>;
   }
   if (error || !analytics) {
-    return <section className="analytics-panel analytics-muted" aria-label="安装到首次使用分析"><strong>安装到首次使用分析暂不可用</strong><span>{error || "线上控制面尚未返回分析数据。"}</span></section>;
+    return <section className="analytics-panel analytics-muted" aria-label="申请到首次工具成功分析"><strong>申请到首次工具成功分析暂不可用</strong><span>{error || "线上控制面尚未返回分析数据。"}</span></section>;
   }
   const coverage = analytics.coverage ?? {};
   const funnel = analytics.funnel ?? [];
@@ -734,10 +739,10 @@ function AnalyticsPanel({ analytics, loading, error }) {
   const bottlenecks = (analytics.bottlenecks ?? []).filter((item) => item.count > 0);
   const errors = analytics.errors ?? [];
   return (
-    <section className="analytics-panel" aria-label="安装到首次使用分析">
+    <section className="analytics-panel" aria-label="申请到首次工具成功分析">
       <div className="analytics-heading">
-        <div><h2>从首次启动到首次使用</h2><p>首次启动是安装近似值；首次使用代表第一次真实 MCP 工具调用。</p></div>
-        <span>{coverage.applications ?? 0} 个申请 · 事件覆盖 {coverage.firstLaunchRate ?? 0}%</span>
+        <div><h2>从申请到首次工具成功</h2><p>“首次观测”是支持该分析的客户端版本第一次出现，不等于安装时间；成功只在工具实际返回成功后计入。</p></div>
+        <span>{coverage.applications ?? 0} 个申请 · 首次观测覆盖 {coverage.firstSeenRate ?? 0}%</span>
       </div>
       <div className="funnel-grid">
         {funnel.map((step) => <div className="funnel-card" key={step.key}><strong>{step.count}</strong><span>{step.label}</span><em>{step.conversionRate}%</em></div>)}

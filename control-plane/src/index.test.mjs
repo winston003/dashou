@@ -603,7 +603,7 @@ test("admin analytics exposes funnel and client failure coverage", async () => {
   db.events.set(`${application.applicationId}.evt_first`, {
     application_id: application.applicationId,
     event_id: "evt_first",
-    stage: "first_mcp_use",
+    stage: "first_tool_call_success",
     outcome: "ok",
     error_code: null,
     client_unix_seconds: Math.floor(Date.parse(row.created_at) / 1_000),

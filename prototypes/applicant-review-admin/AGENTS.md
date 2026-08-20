@@ -18,3 +18,6 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Keep the admin token server-side. The browser may call only the loopback Vite middleware, which exposes the narrow list, detail, approve, and reject routes needed by this panel.
 - Keep the operator panel local-only until a proper administrator authentication layer exists. Never publish an unauthenticated proxy that can reach live approve or reject endpoints.
 - Treat approve and reject as live mutations: require an explicit confirmation, do not trigger them during visual or read-only QA, and record unexecuted mutation tests as `NOT_EXECUTED`.
+- Label `first_seen` as the first observation by a client version that supports analytics; never present it as the installation timestamp.
+- Keep MCP analytics split into connection, tool-call attempt, tool-call success, and categorized tool-call failure. A tool call counts as first use only after the tool handler succeeds.
+- Client milestone events must be crash-safe and idempotent: persist a local pending event before returning, reuse its event ID on retry, and mark it sent only after the control plane confirms receipt.

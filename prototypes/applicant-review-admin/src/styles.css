@@ -95,7 +95,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .analytics-loading, .analytics-muted { display: flex; align-items: center; gap: 9px; min-height: 62px; color: var(--muted); font-size: 12px; }
 .analytics-muted { display: grid; gap: 4px; }
 .analytics-muted strong { color: var(--ink); font-size: 13px; }
-.funnel-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+.funnel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-top: 16px; }
 .funnel-card { position: relative; display: grid; gap: 4px; min-height: 74px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255, 254, 251, .82); }
 .funnel-card strong { font-size: 22px; line-height: 1; color: var(--copper-dark); font-variant-numeric: tabular-nums; }
 .funnel-card span { color: var(--muted); font-size: 11px; }

@@ -15,6 +15,7 @@ const DEVICE_NICKNAME_PATTERN = /^搭手·[\p{L}\p{N}]{1,16}-\d{4}$/u;
 const DEVICE_FINGERPRINT_PATTERN = /^[A-F0-9]{4}-[A-F0-9]{4}$/;
 const CLIENT_EVENT_STAGES = new Set([
   "app_opened",
+  "first_seen",
   "first_launch",
   "application_submit_started",
   "application_submitted",
@@ -37,6 +38,10 @@ const CLIENT_EVENT_STAGES = new Set([
   "notification_enabled",
   "connection_ready",
   "diagnostics_copied",
+  "first_mcp_connection",
+  "first_tool_call_attempt",
+  "first_tool_call_success",
+  "first_tool_call_failure",
   "first_mcp_use",
 ]);
 

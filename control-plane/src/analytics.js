@@ -18,24 +18,32 @@ export function buildAdminAnalytics(applicationRows = [], eventRows = [], now = 
     eventsByApplication.set(event.application_id, list);
   }
 
-  const firstLaunchByApplication = firstSuccessfulEventByStage(eventsByApplication, "first_launch");
-  const firstUseByApplication = firstSuccessfulEventByStage(eventsByApplication, "first_mcp_use");
+  const firstSeenByApplication = firstSuccessfulEventByStages(eventsByApplication, ["first_seen", "first_launch"]);
+  const firstConnectionByApplication = firstSuccessfulEventByStages(eventsByApplication, ["first_mcp_connection", "first_mcp_use"]);
+  const firstAttemptByApplication = firstSuccessfulEventByStages(eventsByApplication, ["first_tool_call_attempt", "first_mcp_use"]);
+  const firstUseByApplication = firstSuccessfulEventByStages(eventsByApplication, ["first_tool_call_success", "first_mcp_use"]);
   const submitted = applications.length;
   const approved = applications.filter((application) => application.approved_at).length;
   const activated = applications.filter((application) => application.activated_at).length;
   const firstUse = firstUseByApplication.size;
+  const connected = milestoneApplicationCount(firstConnectionByApplication, firstAttemptByApplication, firstUseByApplication);
+  const attempted = milestoneApplicationCount(firstAttemptByApplication, firstUseByApplication);
   const funnel = [
     funnelStep("submitted", "已提交申请", submitted, submitted),
     funnelStep("approved", "已批准", approved, submitted),
     funnelStep("activated", "已完成开通", activated, submitted),
-    funnelStep("first_use", "首次真实使用", firstUse, submitted),
+    funnelStep("mcp_connected", "已连接 MCP", connected, submitted),
+    funnelStep("tool_attempted", "已尝试工具", attempted, submitted),
+    funnelStep("first_use", "工具调用成功", firstUse, submitted),
   ];
 
   const durations = [
     durationStep("submit_to_approval", "提交 → 批准", applications.map((application) => between(application.created_at, application.approved_at))),
     durationStep("approval_to_activation", "批准 → 开通", applications.map((application) => between(application.approved_at, application.activated_at))),
-    durationStep("activation_to_first_use", "开通 → 首次使用", applications.map((application) => between(application.activated_at, eventTimestamp(firstUseByApplication.get(application.application_id))))),
-    durationStep("submit_to_first_use", "提交 → 首次使用", applications.map((application) => between(application.created_at, eventTimestamp(firstUseByApplication.get(application.application_id))))),
+    durationStep("activation_to_connection", "开通 → MCP 连接", applications.map((application) => between(application.activated_at, eventTimestamp(firstConnectionByApplication.get(application.application_id))))),
+    durationStep("connection_to_first_use", "MCP 连接 → 工具成功", applications.map((application) => between(eventTimestamp(firstConnectionByApplication.get(application.application_id)), eventTimestamp(firstUseByApplication.get(application.application_id))))),
+    durationStep("activation_to_first_use", "开通 → 工具成功", applications.map((application) => between(application.activated_at, eventTimestamp(firstUseByApplication.get(application.application_id))))),
+    durationStep("submit_to_first_use", "提交 → 工具成功", applications.map((application) => between(application.created_at, eventTimestamp(firstUseByApplication.get(application.application_id))))),
   ];
 
   const bottlenecks = BOTTLENECK_RULES.map((rule) => {
@@ -80,23 +88,30 @@ export function buildAdminAnalytics(applicationRows = [], eventRows = [], now = 
     errors,
     coverage: {
       applications: submitted,
-      firstLaunch: firstLaunchByApplication.size,
+      firstSeen: firstSeenByApplication.size,
+      firstMcpConnection: firstConnectionByApplication.size,
+      firstToolAttempt: firstAttemptByApplication.size,
+      firstToolSuccess: firstUse,
       firstUse,
-      firstLaunchRate: ratio(firstLaunchByApplication.size, submitted),
+      firstSeenRate: ratio(firstSeenByApplication.size, submitted),
       firstUseRate: ratio(firstUse, submitted),
     },
   };
 }
 
-function firstSuccessfulEventByStage(eventsByApplication, stage) {
+function firstSuccessfulEventByStages(eventsByApplication, stages) {
   const result = new Map();
   for (const [applicationId, events] of eventsByApplication) {
     const matching = events
-      .filter((event) => event.stage === stage && event.outcome === "ok")
+      .filter((event) => stages.includes(event.stage) && event.outcome === "ok")
       .sort((left, right) => eventTimestamp(left) - eventTimestamp(right));
     if (matching[0]) result.set(applicationId, matching[0]);
   }
   return result;
+}
+
+function milestoneApplicationCount(...milestones) {
+  return new Set(milestones.flatMap((milestone) => [...milestone.keys()])).size;
 }
 
 function countErrors(events) {
