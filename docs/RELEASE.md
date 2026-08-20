@@ -17,7 +17,7 @@ Release 页面按平台明确列出安装文件，并内置首次使用说明。
 1. Mac Apple Silicon、Mac Intel、Windows 三个下载入口。
 2. macOS 免费内测包的首次打开说明：应用程序 → 右键 Dashou → 打开 → 打开。
 3. 一句话说明：安装后打开搭手，点击“开始使用搭手”；准备好后选择文件夹。
-4. “去 ChatGPT 连接”按钮的下一步说明和截图。
+4. “连接 ChatGPT”按钮和客户端 1/3 → 2/3 → 3/3 引导的说明与截图。
 5. ChatGPT 插件页的直接入口：<https://chatgpt.com/plugins?view=personal>。
 6. 如果页面没有“创建应用”，明确告诉用户去 ChatGPT **设置 → 插件 → 开发者模式**，勾选 **“开发人员模式”** 和 **“在开发者模式下强制执行 CSP”**；工作区管理员则使用 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）**。
 7. 关闭窗口只会收起搭手；搭手会留在 macOS 顶部菜单栏。要停止它，从菜单栏选择“退出搭手”。
@@ -43,8 +43,8 @@ macOS 免费内测版第一次安装时，会看到下面这个“应用程序 +
 1. Mac 内测版第一次打开：把 Dashou 拖到“应用程序”，然后在“应用程序”中右键 Dashou，选择“打开”，再确认一次“打开”。Windows 用户直接运行安装包。
 2. 安装并打开搭手，点击“开始使用搭手”。
 3. 搭手准备好后，点击“添加文件夹”，选择一个或多个工作文件夹，再点击“开始使用”。
-4. 点击“去 ChatGPT 连接”。搭手会自动复制地址并打开 ChatGPT。
-5. 在 ChatGPT“个人”页点击“创建应用”，粘贴地址；需要密码时回到搭手点击“复制授权密码”。
+4. 点击“连接 ChatGPT”。搭手会自动复制地址并打开 ChatGPT，再按客户端的 1/3 → 2/3 → 3/3 引导完成创建和授权。
+5. 客户端显示“ChatGPT 已连接”后，点击“复制任务并打开 ChatGPT”，完成第一个只读项目列表。
 
 ChatGPT 插件页：[直接打开](https://chatgpt.com/plugins?view=personal)。
 
@@ -52,9 +52,9 @@ ChatGPT 插件页：[直接打开](https://chatgpt.com/plugins?view=personal)。
 
 macOS 免费内测版的安装图文说明：[打开 macOS 安装说明](https://github.com/winston003/dashou/blob/main/docs/MACOS_INSTALL.md)。
 
-![搭手已准备好](https://raw.githubusercontent.com/winston003/dashou/desktop-v<version>/docs/images/ready-to-connect.jpg)
+![搭手开始连接 ChatGPT](https://raw.githubusercontent.com/winston003/dashou/desktop-v<version>/docs/images/connect-03-client-start.png)
 
-![ChatGPT 中的搭手连接详情](https://raw.githubusercontent.com/winston003/dashou/desktop-v<version>/docs/images/chatgpt-connection.jpg)
+![搭手提供创建应用所需内容](https://raw.githubusercontent.com/winston003/dashou/desktop-v<version>/docs/images/connect-04-copy-fields.png)
 
 如果看不到“创建应用”：打开 ChatGPT **设置 → 插件 → 开发者模式**，勾选 **“开发人员模式”** 和 **“在开发者模式下强制执行 CSP”**；工作区管理员可从 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）** 进入。打开后返回个人页。
 
@@ -117,6 +117,6 @@ npm run deploy:control-plane
 
 ## 客服话术
 
-> 请打开搭手官方下载页，按你的电脑选择 Mac 或 Windows 安装包。安装后点击“加入试用”，其余准备会自动完成，不需要填写网络信息。搭手准备好后，选择要让 ChatGPT 使用的文件夹，再点击“去 ChatGPT 连接”。
+> 请使用我发给你的 Mac 或 Windows 安装包。安装后点击“开始使用搭手”，准备好后选择工作文件夹，再点击“连接 ChatGPT”。接下来跟着客户端的 1/3 → 2/3 → 3/3 操作即可，不需要记地址或密码。
 
 客服不发送 Tunnel Token、内测连接码、连接密码或源码仓库命令。旧 `.dashou-invite.json` 只在控制面故障恢复时由管理员明确使用。

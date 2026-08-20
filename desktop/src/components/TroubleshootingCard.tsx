@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { applicationStatusLabel, formatLastChecked, platformLabel, troubleshootingNeedsAttention, troubleshootingStatus, troubleshootingStep, troubleshootingStepLabel } from "../diagnostics";
+import { applicationStatusLabel, chatgptConnectionLabel, formatLastChecked, platformLabel, troubleshootingNeedsAttention, troubleshootingStatus, troubleshootingStep, troubleshootingStepLabel } from "../diagnostics";
 import type { AccessStatus, CopyCatalog, DesktopSnapshot } from "../types";
 
 type Props = {
@@ -38,6 +38,7 @@ export function TroubleshootingCard({ snapshot, access, copy, onCopy }: Props) {
           <div><dt>{copy.deviceLabel}</dt><dd>{platformLabel(snapshot?.platform ?? "")}</dd></div>
           <div><dt>{copy.recentCheck}</dt><dd>{formatLastChecked(snapshot?.lastCheckedUnixSeconds ?? 0)}</dd></div>
           <div><dt>{copy.applicationLabel}</dt><dd>{applicationStatusLabel(access.status, copy)}</dd></div>
+          <div><dt>{copy.chatgptStatusLabel}</dt><dd>{chatgptConnectionLabel(snapshot?.chatgptConnection?.phase, copy)}</dd></div>
         </dl>
         <button class="button button-secondary troubleshooting-button" type="button" onClick={onCopy}>{copy.copyDiagnostics}</button>
       </div>

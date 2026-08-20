@@ -22,6 +22,7 @@ export type Bridge = {
   setPreferences(preferences: Partial<Preferences>): Promise<DesktopSnapshot>;
   restartRuntime(): Promise<DesktopSnapshot>;
   connectionCode(): Promise<string | null>;
+  markChatGPTSetupOpened(): Promise<void>;
   diagnosticReport(): Promise<unknown>;
   recordEvent(stage: string, outcome?: "ok" | "error", errorCode?: string, applicationId?: string): Promise<void>;
   chooseFolders(title: string): Promise<string[]>;
@@ -88,6 +89,7 @@ export const tauriBridge: Bridge = {
   setPreferences: (preferences) => invokeCommand<DesktopSnapshot>("set_preferences", preferences),
   restartRuntime: () => invokeCommand<DesktopSnapshot>("restart_runtime"),
   connectionCode: () => invokeCommand<string | null>("connection_code"),
+  markChatGPTSetupOpened: () => invokeCommand("mark_chatgpt_setup_opened"),
   diagnosticReport: () => invokeCommand("diagnostic_report"),
   recordEvent: (stage, outcome = "ok", errorCode, applicationId) => invokeCommand("record_client_event", {
     stage,

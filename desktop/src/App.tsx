@@ -3,11 +3,12 @@ import { defaultCopy, mergeCopy } from "./copy";
 import { setAutostart, tauriBridge, normalizeBridgeError, type Bridge } from "./bridge";
 import { reducer, initialState, phaseLabel, accessIsReady, accessIsWaiting, shouldPollAccess, canCopyPassword } from "./state";
 import type { AccessStatus, CopyCatalog, DesktopSnapshot, Preferences, RuntimePhase } from "./types";
-import { applicationStatusLabel, troubleshootingStatus, troubleshootingStep, troubleshootingStepLabel } from "./diagnostics";
+import { applicationStatusLabel, troubleshootingNeedsAttention, troubleshootingStatus, troubleshootingStep, troubleshootingStepLabel } from "./diagnostics";
 import { FolderPicker } from "./components/FolderPicker";
 import { ProgressSteps } from "./components/ProgressSteps";
 import { SettingsView } from "./components/SettingsView";
 import { TroubleshootingCard } from "./components/TroubleshootingCard";
+import { ChatGPTConnectGuide } from "./components/ChatGPTConnectGuide";
 import "./styles.css";
 import handMark from "./assets/hand-mark.svg";
 import mascot from "./assets/mascot.png";
@@ -35,7 +36,8 @@ export function App({ bridge = tauriBridge }: Props) {
   const autostartSynced = useRef(false);
   const accessFailureRecorded = useRef(false);
   const activationRecorded = useRef(false);
-  const connectionReadyRecorded = useRef(false);
+  const runtimeReadyRecorded = useRef(false);
+  const connectionPhaseRecorded = useRef<string | null>(null);
 
   const toast = useCallback((message: string) => {
     dispatch({ type: "toast", value: message });
@@ -53,9 +55,16 @@ export function App({ bridge = tauriBridge }: Props) {
         dispatch({ type: "snapshot", snapshot, syncRoots });
         if (snapshot.runtimePhase === "recovering" && previousPhase.current !== "recovering") void bridge.recordEvent("runtime_recovering");
         if (snapshot.runtimePhase === "blocked" && previousPhase.current !== "blocked") void bridge.recordEvent("runtime_blocked", "error", snapshot.error?.code);
-        if (snapshot.runtimePhase === "ready" && !connectionReadyRecorded.current) {
-          connectionReadyRecorded.current = true;
-          void bridge.recordEvent("connection_ready");
+        if (snapshot.runtimePhase === "ready" && !runtimeReadyRecorded.current) {
+          runtimeReadyRecorded.current = true;
+          void bridge.recordEvent("runtime_ready");
+        }
+        const chatgptPhase = snapshot.chatgptConnection?.phase ?? "not_started";
+        if (chatgptPhase !== connectionPhaseRecorded.current) {
+          connectionPhaseRecorded.current = chatgptPhase;
+          if (chatgptPhase === "oauth_completed") void bridge.recordEvent("oauth_completed");
+          if (chatgptPhase === "connected") void bridge.recordEvent("first_mcp_session");
+          if (chatgptPhase === "first_task_completed") void bridge.recordEvent("first_tool_success");
         }
         if (!autostartSynced.current && snapshot.configured) {
           autostartSynced.current = true;
@@ -72,7 +81,8 @@ export function App({ bridge = tauriBridge }: Props) {
             dispatch({ type: "access", access });
             if (access.status === "not_applied" && access.reason) {
               activationRecorded.current = false;
-              connectionReadyRecorded.current = false;
+              runtimeReadyRecorded.current = false;
+              connectionPhaseRecorded.current = null;
               previousPhase.current = null;
               toast(access.reason);
               void bridge.recordEvent("application_status_failed", "error", "APPLICATION_RESET_REQUIRED");
@@ -134,8 +144,9 @@ export function App({ bridge = tauriBridge }: Props) {
   const accessReady = accessIsReady(snapshot, state.access);
   const isWaiting = accessIsWaiting(state.access);
   const runtimePhase = snapshot?.runtimePhase ?? "needs_setup";
+  const chatgptPhase = snapshot?.chatgptConnection?.phase ?? "not_started";
   const statusEyebrow = runtimePhase === "ready"
-    ? copy.connectedEyebrow
+    ? ["connected", "first_task_completed"].includes(chatgptPhase) ? copy.connectedEyebrow : copy.computerReadyEyebrow
     : runtimePhase === "recovering"
       ? copy.recoveringEyebrow
       : copy.connectingEyebrow;
@@ -226,6 +237,45 @@ export function App({ bridge = tauriBridge }: Props) {
     } catch { dispatch({ type: "error", value: copy.chatgptFailure }); }
   }
 
+  async function startChatGPTConnection() {
+    if (!snapshot?.mcpUrl) return;
+    dispatch({ type: "busy", value: "chatgpt" });
+    dispatch({ type: "error", value: null });
+    try {
+      await bridge.copy(snapshot.mcpUrl);
+      await bridge.markChatGPTSetupOpened();
+      await bridge.openChatGPT();
+      void bridge.recordEvent("chatgpt_setup_opened");
+      void bridge.recordEvent("chatgpt_opened");
+      toast(copy.startConnectionOpened);
+      await load(false);
+    } catch {
+      dispatch({ type: "error", value: copy.chatgptFailure });
+    } finally {
+      dispatch({ type: "busy", value: null });
+    }
+  }
+
+  async function copyConnectionValue(value: string, successMessage: string) {
+    try {
+      await bridge.copy(value);
+      toast(successMessage);
+    } catch {
+      dispatch({ type: "error", value: copy.addressFailure });
+    }
+  }
+
+  async function copyFirstTask() {
+    try {
+      await bridge.copy(copy.firstTaskPrompt);
+      await bridge.openChatGPT();
+      void bridge.recordEvent("chatgpt_opened");
+      toast(copy.chatgptOpened);
+    } catch {
+      dispatch({ type: "error", value: copy.chatgptFailure });
+    }
+  }
+
   async function copyAddress() {
     if (!snapshot?.mcpUrl) return;
     try { await bridge.copy(snapshot.mcpUrl); toast(copy.addressCopied); }
@@ -298,6 +348,18 @@ export function App({ bridge = tauriBridge }: Props) {
 
   const phase = phaseLabel(runtimePhase);
   const statusText = copy[statusCopy[runtimePhase] ?? "stopped"];
+  const displayStatusText = runtimePhase === "ready" && chatgptPhase === "first_task_completed"
+    ? copy.firstTaskCompletedTitle
+    : runtimePhase === "ready" && chatgptPhase === "connected"
+      ? copy.chatgptConnectedTitle
+      : statusText;
+  const runtimeHint = runtimePhase === "ready" && chatgptPhase === "first_task_completed"
+    ? copy.firstTaskHint
+    : runtimePhase === "ready" && chatgptPhase === "connected"
+      ? copy.connectedHint
+      : runtimePhase === "ready"
+        ? copy.readyHint
+        : phase === "recovering" ? copy.recoveringHint : copy.workingHint;
   const showSetup = !accessReady || !snapshot?.configured || rootsChanged;
 
   if (state.loading && !snapshot) return <main class="app-shell loading-shell"><img class="loading-mark" src={handMark} alt="搭手" /><p>{copy.loading}</p></main>;
@@ -313,7 +375,7 @@ export function App({ bridge = tauriBridge }: Props) {
       </header>
 
       {state.tab === "settings" ? (
-        <SettingsView copy={copy} snapshot={snapshot} access={state.access} version={snapshot?.version ?? "0.1.3-rc.12"} preferences={state.preferences} busy={state.busy} availableUpdate={state.availableUpdate} onPreference={preference} onCheckUpdate={checkUpdate} onInstallUpdate={installUpdate} onDismissUpdate={() => dispatch({ type: "availableUpdate", value: null })} onCopyDiagnostics={diagnostics} onCopyAddress={copyAddress} onImportInvite={importInvite} onConfigureAgain={() => dispatch({ type: "tab", tab: "use" })} />
+        <SettingsView copy={copy} snapshot={snapshot} access={state.access} version={snapshot?.version ?? "0.1.3-rc.13"} preferences={state.preferences} busy={state.busy} availableUpdate={state.availableUpdate} onPreference={preference} onCheckUpdate={checkUpdate} onInstallUpdate={installUpdate} onDismissUpdate={() => dispatch({ type: "availableUpdate", value: null })} onCopyDiagnostics={diagnostics} onCopyAddress={copyAddress} onImportInvite={importInvite} onConfigureAgain={() => dispatch({ type: "tab", tab: "use" })} />
       ) : (
         <div class="use-page">
           {showSetup ? (
@@ -334,16 +396,12 @@ export function App({ bridge = tauriBridge }: Props) {
           ) : (
             <>
               <section class="ready-card">
-                <div class="ready-heading"><StatusDot phase={runtimePhase} label={statusText} /><div><p class="eyebrow">{statusEyebrow}</p><h1>{statusText}</h1></div></div>
-                <p class="lede">{runtimePhase === "ready" ? copy.readyHint : phase === "recovering" ? copy.recoveringHint : copy.workingHint}</p>
-                <div class="action-grid">
-                  <button class="button button-primary" type="button" disabled={runtimePhase !== "ready"} onClick={openChatGPT}>{copy.openChatGPT}</button>
-                  <button class="button button-secondary" type="button" disabled={!passwordAvailable} onClick={copyPassword}>{copy.copyPassword}</button>
-                </div>
+                <div class="ready-heading"><StatusDot phase={runtimePhase} label={displayStatusText} /><div><p class="eyebrow">{statusEyebrow}</p><h1>{displayStatusText}</h1></div></div>
+                <p class="lede">{runtimeHint}</p>
+                {runtimePhase === "ready" && snapshot ? <ChatGPTConnectGuide snapshot={snapshot} copy={copy} passwordAvailable={passwordAvailable} busy={state.busy} onStart={startChatGPTConnection} onOpenChatGPT={openChatGPT} onCopy={copyConnectionValue} onCopyPassword={copyPassword} onCopyFirstTask={copyFirstTask} /> : null}
                 {runtimePhase === "blocked" || runtimePhase === "stopped" ? <div class="recover-panel"><strong>{runtimePhase === "blocked" ? copy.failureTitle : copy.stopped}</strong><p>{runtimePhase === "blocked" && snapshot?.error ? friendlyError({ code: snapshot.error.code }, copy.failureBody, copy) : runtimePhase === "blocked" ? copy.failureBody : copy.workingHint}</p><button class="button button-primary" type="button" disabled={state.busy === "restart"} onClick={restart}>{copy.retry}</button></div> : null}
                 <FolderPicker roots={state.selectedRoots} copy={copy} disabled={state.busy !== null} onAdd={addFolders} onRemove={removeFolder} />
-                <TroubleshootingCard snapshot={snapshot} access={state.access} copy={copy} onCopy={diagnostics} />
-                <div class="help-row"><button class="text-button" type="button" aria-expanded={state.helpOpen} onClick={() => dispatch({ type: "help", value: !state.helpOpen })}>{copy.helpTitle} <span aria-hidden="true">{state.helpOpen ? "↑" : "↓"}</span></button>{state.helpOpen ? <div class="help-popover"><p>{copy.helpBody}</p><p>{copy.helpPath}</p></div> : null}</div>
+                {troubleshootingNeedsAttention(state.access, snapshot) ? <TroubleshootingCard snapshot={snapshot} access={state.access} copy={copy} onCopy={diagnostics} /> : null}
               </section>
               <p class="resident-note">{copy.residentNote}</p>
             </>

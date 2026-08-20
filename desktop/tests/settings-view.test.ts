@@ -16,11 +16,11 @@ test("settings shows release notes before the user installs an update", () => {
     copy: defaultCopy,
     snapshot: null,
     access: { status: "not_applied" },
-    version: "0.1.3-rc.12",
+    version: "0.1.3-rc.13",
     preferences: { launchAtLogin: true, notifyWhenReady: false },
     busy: null,
     availableUpdate: {
-      currentVersion: "0.1.3-rc.12",
+      currentVersion: "0.1.3-rc.13",
       version: "0.1.3-rc.13",
       body: "连接更稳定，首次使用更简单。",
     },

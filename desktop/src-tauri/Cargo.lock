@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "dashou-desktop"
-version = "0.1.3-rc.12"
+version = "0.1.3-rc.13"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",

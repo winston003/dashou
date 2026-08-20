@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { accessIsReady, accessIsWaiting, canCopyPassword, canRemoveRoot, initialState, phaseLabel, reducer, shouldPollAccess } from "../src/state";
+import { accessIsReady, accessIsWaiting, canCopyPassword, canRemoveRoot, chatgptGuideStep, initialState, phaseLabel, reducer, shouldPollAccess } from "../src/state";
 import type { DesktopSnapshot } from "../src/types";
 
 test("snapshot hydrates roots and preferences without secrets", () => {
   const next = reducer(initialState, {
     type: "snapshot",
     snapshot: {
-      version: "0.1.3-rc.12",
+      version: "0.1.3-rc.13",
       deviceNickname: "搭手·青柠-4827",
       deviceFingerprint: "7F3A-91C2",
       platform: "macos-aarch64",
@@ -42,7 +42,7 @@ test("background snapshots do not overwrite folders being edited", () => {
   const hydrated = reducer(initialState, {
     type: "snapshot",
     snapshot: {
-      version: "0.1.3-rc.12",
+      version: "0.1.3-rc.13",
       deviceNickname: "搭手·青柠-4827",
       deviceFingerprint: "7F3A-91C2",
       platform: "macos-aarch64",
@@ -115,12 +115,21 @@ test("password remains available while the local service is healthy during recov
   assert.equal(canCopyPassword({ configured: true, localHealth: true, runtimePhase: "stopped" } as DesktopSnapshot), false);
 });
 
+test("ChatGPT onboarding advances only on real connection milestones", () => {
+  assert.equal(chatgptGuideStep("not_started"), 1);
+  assert.equal(chatgptGuideStep("setup_opened"), 2);
+  assert.equal(chatgptGuideStep("authorization_requested"), 3);
+  assert.equal(chatgptGuideStep("oauth_completed"), 3);
+  assert.equal(chatgptGuideStep("connected"), 3);
+  assert.equal(chatgptGuideStep("first_task_completed"), 3);
+});
+
 test("a healthy snapshot clears a stale restart error", () => {
   const withError = reducer(initialState, { type: "error", value: "搭手发现另一套连接正在使用这台电脑" });
   const healthy = reducer(withError, {
     type: "snapshot",
     snapshot: {
-      version: "0.1.3-rc.12",
+      version: "0.1.3-rc.13",
       deviceNickname: "搭手·青柠-4827",
       deviceFingerprint: "7F3A-91C2",
       platform: "macos-aarch64",
@@ -142,7 +151,7 @@ test("a healthy snapshot clears a stale restart error", () => {
 
 test("an available update is kept for review before installation", () => {
   const update = {
-    currentVersion: "0.1.3-rc.12",
+    currentVersion: "0.1.3-rc.13",
     version: "0.1.3-rc.13",
     body: "连接更稳定，首次使用更简单。",
   };

@@ -13,6 +13,23 @@ export type UiError = {
   diagnosticId?: string;
 };
 
+export type ChatGPTConnectionPhase =
+  | "not_started"
+  | "setup_opened"
+  | "authorization_requested"
+  | "oauth_completed"
+  | "connected"
+  | "first_task_completed";
+
+export type ChatGPTConnectionStatus = {
+  phase: ChatGPTConnectionPhase;
+  setupOpenedAt?: number;
+  authorizationRequestedAt?: number;
+  oauthCompletedAt?: number;
+  firstSessionAt?: number;
+  firstToolSuccessAt?: number;
+};
+
 export type DesktopSnapshot = {
   version: string;
   deviceNickname: string;
@@ -31,6 +48,7 @@ export type DesktopSnapshot = {
   notifyWhenReady: boolean;
   contentVersion: string;
   uiSource: "built-in" | "downloaded";
+  chatgptConnection?: ChatGPTConnectionStatus;
 };
 
 export type AccessStatus = {
@@ -181,6 +199,52 @@ export type CopyCatalog = {
   uiFailureTitle: string;
   uiFailureBody: string;
   reloadUi: string;
+  computerReadyEyebrow: string;
+  computerReadyTitle: string;
+  computerReadyBody: string;
+  connectChatGPT: string;
+  connectStepOne: string;
+  connectStepTwo: string;
+  connectStepThree: string;
+  developerModeTitle: string;
+  developerModeBody: string;
+  developerModePath: string;
+  developerModeChecks: string;
+  openedDeveloperMode: string;
+  createAppTitle: string;
+  createAppBody: string;
+  appNameLabel: string;
+  appNameValue: string;
+  appDescriptionLabel: string;
+  appDescriptionValue: string;
+  serverUrlLabel: string;
+  authenticationLabel: string;
+  authenticationValue: string;
+  copyValue: string;
+  copiedName: string;
+  copiedDescription: string;
+  copiedAddressForSetup: string;
+  reopenChatGPT: string;
+  waitingForAuthorization: string;
+  authorizationBody: string;
+  oauthCompletedTitle: string;
+  oauthCompletedBody: string;
+  chatgptConnectedTitle: string;
+  chatgptConnectedBody: string;
+  firstTaskPrompt: string;
+  copyTaskAndOpen: string;
+  firstTaskCompletedTitle: string;
+  firstTaskCompletedBody: string;
+  startConnectionOpened: string;
+  connectedHint: string;
+  firstTaskHint: string;
+  chatgptStatusLabel: string;
+  chatgptNotStarted: string;
+  chatgptSetupOpened: string;
+  chatgptAuthorizationRequested: string;
+  chatgptOauthCompleted: string;
+  chatgptConnected: string;
+  chatgptFirstTaskCompleted: string;
 };
 
 export type Preferences = {

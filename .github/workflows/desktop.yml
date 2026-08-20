@@ -386,16 +386,18 @@ jobs:
 
             ## 5 分钟开始使用
 
-            1. 安装并打开搭手，点击“加入试用”。
+            1. 安装并打开搭手，点击“开始使用搭手”。
             2. 搭手准备好后，点击“添加文件夹”，选择一个或多个工作文件夹，再点击“开始使用”。
-            3. 点击“去 ChatGPT 连接”。搭手会自动复制地址并打开 ChatGPT。
-            4. 在 ChatGPT“个人”页点击“创建应用”，粘贴地址；需要密码时回到搭手点击“复制授权密码”。
+            3. 点击“连接 ChatGPT”，跟着客户端里的 1/3 → 2/3 → 3/3 完成创建和授权；名称、描述、服务器 URL 和授权密码都能直接复制。
+            4. 客户端显示“ChatGPT 已连接”后，点击“复制任务并打开 ChatGPT”，完成第一个只读项目检查。
 
             [打开 ChatGPT 插件页](https://chatgpt.com/plugins?view=personal)
 
             ![搭手首次设置](https://raw.githubusercontent.com/winston003/dashou/${{ github.ref_name }}/docs/images/first-setup.jpg)
 
-            ![搭手已准备好](https://raw.githubusercontent.com/winston003/dashou/${{ github.ref_name }}/docs/images/ready-to-connect.jpg)
+            ![搭手开始连接 ChatGPT](https://raw.githubusercontent.com/winston003/dashou/${{ github.ref_name }}/docs/images/connect-03-client-start.png)
+
+            ![搭手提供创建应用所需内容](https://raw.githubusercontent.com/winston003/dashou/${{ github.ref_name }}/docs/images/connect-04-copy-fields.png)
 
             如果看不到“创建应用”：打开 ChatGPT **设置 → 插件 → 开发者模式**，勾选 **“开发人员模式”** 和 **“在开发者模式下强制执行 CSP”**；工作区管理员可从 **工作区设置（Workspace settings）→ 应用（Apps）→ 创建（Create）** 进入。
 
@@ -405,12 +407,12 @@ jobs:
 
             ## 最近变化
 
-            - 修复 Windows 正式版启动时弹出黑色控制台窗口的问题。
-            - 修复部分 Windows 安装目录位于非系统盘时，后台服务启动失败并反复恢复的问题。
-            - 准备失败时可直接复制隐私安全的排查信息给客服。
-            - 支持选择多个工作文件夹。
-            - 关闭窗口后继续驻留菜单栏，只有选择“退出搭手”才停止服务。
-            - 安装包内置 Node.js 和 `cloudflared`，用户不需要另行安装。
+            - 新增客户端内 1/3 → 2/3 → 3/3 ChatGPT 连接引导，不必来回翻找说明。
+            - 创建搭手需要的名称、描述、服务器 URL 和授权密码都可以直接复制。
+            - 分开显示“电脑端准备好”“授权完成”“ChatGPT 已连接”和“首次任务成功”。
+            - 授权页会直接提示从搭手客户端复制密码。
+            - 新增第一个只读任务入口，用真实项目列表确认连接已经可以工作。
+            - 排查信息会标明连接停在哪一步，但不包含密码、目录路径、文件内容或 ChatGPT 对话。
 
             完整图文说明：[GETTING_STARTED.md](https://github.com/winston003/dashou/blob/${{ github.ref_name }}/docs/GETTING_STARTED.md)
           files: release-assets/*

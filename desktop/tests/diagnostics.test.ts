@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultCopy } from "../src/copy";
-import { applicationStatusLabel, platformLabel, troubleshootingNeedsAttention, troubleshootingStatus, troubleshootingStep, troubleshootingStepLabel } from "../src/diagnostics";
+import { applicationStatusLabel, chatgptConnectionLabel, platformLabel, troubleshootingNeedsAttention, troubleshootingStatus, troubleshootingStep, troubleshootingStepLabel } from "../src/diagnostics";
 import type { DesktopSnapshot } from "../src/types";
 
 const snapshot = (overrides: Partial<DesktopSnapshot> = {}): DesktopSnapshot => ({
-  version: "0.1.3-rc.12",
+  version: "0.1.3-rc.13",
   deviceNickname: "搭手·青柠-4827",
   deviceFingerprint: "7F3A-91C2",
   platform: "windows-x86_64",
@@ -46,6 +46,13 @@ test("application status stays human-readable", () => {
   assert.equal(applicationStatusLabel("not_applied", defaultCopy), "还没有开始");
   assert.equal(applicationStatusLabel("approved", defaultCopy), "已经准备好");
   assert.equal(applicationStatusLabel("revoked", defaultCopy), "已结束");
+});
+
+test("support card distinguishes local readiness from ChatGPT progress", () => {
+  assert.equal(chatgptConnectionLabel("not_started", defaultCopy), "还未开始");
+  assert.equal(chatgptConnectionLabel("authorization_requested", defaultCopy), "等待授权密码");
+  assert.equal(chatgptConnectionLabel("connected", defaultCopy), "已经连接");
+  assert.equal(chatgptConnectionLabel("first_task_completed", defaultCopy), "首次任务成功");
 });
 
 test("troubleshooting stays folded unless the user needs to act", () => {

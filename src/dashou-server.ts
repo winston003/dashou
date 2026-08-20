@@ -15,6 +15,7 @@ import { createPilotAccessGate } from "./dashou-pilot-policy.js";
 import { DashouWorkspaceRegistry } from "./dashou-workspace.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import { McpSessionRegistry } from "./mcp-sessions.js";
+import { markConnectionMilestone } from "./connection-milestones.js";
 
 const MCP_SESSION_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
 const MCP_SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1_000;
@@ -30,7 +31,7 @@ export interface RunningDashouServer {
   ready(): Promise<void>;
   close(): Promise<void>;
 }
-export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry): McpServer {
+export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToolSuccess: () => void = () => undefined): McpServer {
   const server = new McpServer(
     {
       name: "dashou",
@@ -71,6 +72,7 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry): McpS
       const result = projects.length === 0
         ? "No authorized project directories are currently available."
         : projects.map((project) => `${project.name}: ${project.path}${project.available ? "" : " (currently unavailable)"}`).join("\n");
+      onToolSuccess();
       return {
         content: [{ type: "text", text: result }],
         structuredContent: { projects },
@@ -110,6 +112,7 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry): McpS
         instructionText,
         nestedText,
       ].join("\n");
+      onToolSuccess();
       return {
         content: [{ type: "text", text: result }],
         structuredContent: {
@@ -139,6 +142,7 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry): McpS
     },
     async ({ workspaceId, path, offset, limit }) => {
       const result = await workspaces.readText(workspaceId, path, offset, limit);
+      onToolSuccess();
       return {
         content: [{ type: "text", text: result }],
         structuredContent: { result },
@@ -167,6 +171,7 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry): McpS
     async ({ workspaceId, path, content }) => {
       const byteLength = await workspaces.writeText(workspaceId, path, content);
       const result = `Wrote ${path} (${byteLength} bytes).`;
+      onToolSuccess();
       return {
         content: [{ type: "text", text: result }],
         structuredContent: { result },
@@ -195,6 +200,7 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry): McpS
     async ({ workspaceId, path, edits }) => {
       await workspaces.editText(workspaceId, path, edits);
       const result = `Edited ${path} (${edits.length} replacement${edits.length === 1 ? "" : "s"}).`;
+      onToolSuccess();
       return {
         content: [{ type: "text", text: result }],
         structuredContent: { result },
@@ -238,6 +244,7 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry): McpS
         result.stderr ? `stderr:\n${result.stderr}` : undefined,
         result.truncated ? "output truncated" : undefined,
       ].filter(Boolean).join("\n");
+      onToolSuccess();
       return {
         content: [{ type: "text", text }],
         structuredContent: {
@@ -334,13 +341,14 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (newSessionId) => {
             if (transport) transports.register(newSessionId, transport);
+            markConnectionMilestone(config.stateDir, "first-mcp-session");
           },
         });
         transport.onclose = () => {
           const closedSessionId = transport?.sessionId;
           if (closedSessionId) transports.remove(closedSessionId);
         };
-        const mcpServer = createDashouMcpServer(workspaces);
+        const mcpServer = createDashouMcpServer(workspaces, () => markConnectionMilestone(config.stateDir, "first-tool-success"));
         await mcpServer.connect(transport);
       } else {
         sendJsonRpcError(res, 400, -32000, "No valid MCP session");

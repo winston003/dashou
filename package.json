@@ -1,6 +1,6 @@
 {
   "name": "@warmbyte/dashou",
-  "version": "0.1.3-rc.12",
+  "version": "0.1.3-rc.13",
   "description": "让 ChatGPT 安全地读取、修改并执行你授权的本地项目。",
   "type": "module",
   "main": "dist/dashou-server.js",
@@ -27,7 +27,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "start": "node dist/dashou-cli.js serve",
-    "test": "tsx src/dashou-config.test.ts && tsx src/dashou-oauth-store.test.ts && tsx src/dashou-workspace.test.ts && tsx src/dashou-tunnel.test.ts && tsx src/dashou-runtime-contract.test.ts && tsx src/dashou-single-instance.test.ts && tsx src/dashou-server-shutdown.test.ts && tsx src/dashou-upgrade.test.ts && tsx src/dashou-pilot-policy.test.ts && tsx src/dashou-pilot-control.test.ts && tsx src/dashou-server.test.ts && tsx src/dashou-http.test.ts",
+    "test": "tsx src/dashou-config.test.ts && tsx src/dashou-oauth-store.test.ts && tsx src/connection-milestones.test.ts && tsx src/dashou-workspace.test.ts && tsx src/dashou-tunnel.test.ts && tsx src/dashou-runtime-contract.test.ts && tsx src/dashou-single-instance.test.ts && tsx src/dashou-server-shutdown.test.ts && tsx src/dashou-upgrade.test.ts && tsx src/dashou-pilot-policy.test.ts && tsx src/dashou-pilot-control.test.ts && tsx src/dashou-server.test.ts && tsx src/dashou-http.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check:versions": "node scripts/check-version-consistency.mjs",
     "verify:release": "npm run typecheck && npm test && npm run build && npm_config_registry=https://registry.npmjs.org npm audit --omit=dev",

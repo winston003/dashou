@@ -1,4 +1,4 @@
-import type { AccessStatus, AvailableUpdate, DesktopSnapshot, Preferences, RuntimePhase } from "./types";
+import type { AccessStatus, AvailableUpdate, ChatGPTConnectionPhase, DesktopSnapshot, Preferences, RuntimePhase } from "./types";
 
 export type Tab = "use" | "settings";
 
@@ -77,6 +77,13 @@ export function canCopyPassword(snapshot: DesktopSnapshot | null): boolean {
       && snapshot.runtimePhase !== "blocked"
       && snapshot.runtimePhase !== "stopped",
   );
+}
+
+export function chatgptGuideStep(phase: ChatGPTConnectionPhase): 1 | 2 | 3 {
+  if (phase === "not_started") return 1;
+  if (phase === "setup_opened") return 2;
+  if (phase === "authorization_requested") return 3;
+  return 3;
 }
 
 function rootsEqual(left: string[], right: string[]): boolean {

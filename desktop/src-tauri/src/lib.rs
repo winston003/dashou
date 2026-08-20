@@ -123,6 +123,18 @@ struct DesktopSnapshot {
     notify_when_ready: bool,
     content_version: String,
     ui_source: String,
+    chatgpt_connection: ChatgptConnectionStatus,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ChatgptConnectionStatus {
+    phase: String,
+    setup_opened_at: Option<u64>,
+    authorization_requested_at: Option<u64>,
+    oauth_completed_at: Option<u64>,
+    first_session_at: Option<u64>,
+    first_tool_success_at: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -281,6 +293,7 @@ struct DiagnosticRuntime {
     public_health: bool,
     recovery_attempts: u8,
     error_code: Option<String>,
+    chatgpt_connection_phase: String,
 }
 
 const DIAGNOSTIC_STAGES: &[&str] = &[
@@ -304,6 +317,11 @@ const DIAGNOSTIC_STAGES: &[&str] = &[
     "update_install_started",
     "update_install_failed",
     "notification_enabled",
+    "runtime_ready",
+    "chatgpt_setup_opened",
+    "oauth_completed",
+    "first_mcp_session",
+    "first_tool_success",
     "connection_ready",
     "diagnostics_copied",
 ];
@@ -362,6 +380,7 @@ async fn diagnostic_report(
             public_health: snapshot.public_health,
             recovery_attempts: snapshot.recovery_attempts,
             error_code: snapshot.error.map(|error| error.code),
+            chatgpt_connection_phase: snapshot.chatgpt_connection.phase,
         },
     ))
 }
@@ -472,7 +491,17 @@ async fn desktop_snapshot_for(
         notify_when_ready: prefs.notify_when_ready,
         content_version: ui.version.unwrap_or_else(|| "built-in".into()),
         ui_source: ui.source.into(),
+        chatgpt_connection: read_chatgpt_connection_status(&data_dir.join("state")),
     })
+}
+
+#[tauri::command]
+fn mark_chatgpt_setup_opened(app: AppHandle) -> Result<(), String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    write_connection_milestone(&data_dir.join("state"), "setup-opened")
 }
 
 #[tauri::command]
@@ -784,6 +813,7 @@ fn import_invite(app: AppHandle, path: String) -> Result<(), String> {
         },
         true,
     )?;
+    clear_connection_milestones(&data_dir.join("state"))?;
     clear_application_record(&config_dir)?;
     Ok(())
 }
@@ -1845,6 +1875,7 @@ fn reset_access_state_inner(app: &AppHandle, state: &DaemonState) -> Result<(), 
     // and public address that belong to the invalid application. The next
     // application starts from a fresh idempotency credential without making
     // the user choose their folders again.
+    clear_connection_milestones(&data_dir.join("state"))?;
     clear_access_files(&config_dir)
 }
 
@@ -1995,6 +2026,7 @@ fn build_diagnostic_report(data_dir: &Path) -> DiagnosticReport {
             public_health: false,
             recovery_attempts: 0,
             error_code: None,
+            chatgpt_connection_phase: "not_started".into(),
         },
     )
 }
@@ -2333,6 +2365,99 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T, secret: bool) -> Resu
     fs::rename(temp, path).map_err(|error| error.to_string())
 }
 
+const CONNECTION_MILESTONES: &[&str] = &[
+    "setup-opened",
+    "authorization-requested",
+    "oauth-completed",
+    "first-mcp-session",
+    "first-tool-success",
+];
+
+fn write_connection_milestone(state_dir: &Path, milestone: &str) -> Result<(), String> {
+    if !CONNECTION_MILESTONES.contains(&milestone) {
+        return Err("不支持的连接阶段".into());
+    }
+    fs::create_dir_all(state_dir).map_err(|error| error.to_string())?;
+    let path = state_dir.join(format!("connection-{milestone}"));
+    let temp = state_dir.join(format!("connection-{milestone}.{}.tmp", std::process::id()));
+    fs::write(&temp, format!("{}\n", unix_seconds())).map_err(|error| error.to_string())?;
+    set_private_file(&temp)?;
+    fs::rename(temp, path).map_err(|error| error.to_string())
+}
+
+fn connection_milestone_time(state_dir: &Path, milestone: &str) -> Option<u64> {
+    fs::read_to_string(state_dir.join(format!("connection-{milestone}")))
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+}
+
+fn legacy_oauth_completed_at(state_dir: &Path) -> Option<u64> {
+    let oauth_path = state_dir.join("oauth.json");
+    let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(&oauth_path).ok()?).ok()?;
+    let now = unix_seconds();
+    let valid_token = ["accessTokens", "refreshTokens"].iter().any(|key| {
+        value.get(key).and_then(serde_json::Value::as_object).is_some_and(|records| {
+            records.values().any(|record| {
+                record
+                    .get("expiresAt")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|expires| expires >= now)
+            })
+        })
+    });
+    valid_token.then(|| {
+        fs::metadata(oauth_path)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs())
+            .unwrap_or(now)
+    })
+}
+
+fn read_chatgpt_connection_status(state_dir: &Path) -> ChatgptConnectionStatus {
+    let setup_opened_at = connection_milestone_time(state_dir, "setup-opened");
+    let authorization_requested_at = connection_milestone_time(state_dir, "authorization-requested");
+    let oauth_completed_at = connection_milestone_time(state_dir, "oauth-completed")
+        .or_else(|| legacy_oauth_completed_at(state_dir));
+    let first_session_at = connection_milestone_time(state_dir, "first-mcp-session");
+    let first_tool_success_at = connection_milestone_time(state_dir, "first-tool-success");
+    let phase = if first_tool_success_at.is_some() {
+        "first_task_completed"
+    } else if first_session_at.is_some() {
+        "connected"
+    } else if oauth_completed_at.is_some() {
+        "oauth_completed"
+    } else if authorization_requested_at.is_some() {
+        "authorization_requested"
+    } else if setup_opened_at.is_some() {
+        "setup_opened"
+    } else {
+        "not_started"
+    };
+    ChatgptConnectionStatus {
+        phase: phase.into(),
+        setup_opened_at,
+        authorization_requested_at,
+        oauth_completed_at,
+        first_session_at,
+        first_tool_success_at,
+    }
+}
+
+fn clear_connection_milestones(state_dir: &Path) -> Result<(), String> {
+    for milestone in CONNECTION_MILESTONES {
+        match fs::remove_file(state_dir.join(format!("connection-{milestone}"))) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("无法重置连接引导：{error}")),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn set_private_file(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
@@ -2488,6 +2613,7 @@ pub fn run() {
             set_preferences,
             restart_runtime,
             connection_code,
+            mark_chatgpt_setup_opened,
             apply_for_access,
             application_status,
             record_client_event,
@@ -2638,7 +2764,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.3-rc.12".into(),
+            version: "0.1.3-rc.13".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -2653,7 +2779,7 @@ mod tests {
     #[test]
     fn desktop_snapshot_does_not_serialize_secrets_or_file_contents() {
         let snapshot = DesktopSnapshot {
-            version: "0.1.3-rc.12".into(),
+            version: "0.1.3-rc.13".into(),
             device_nickname: "搭手·青柠-4827".into(),
             device_fingerprint: "7F3A-91C2".into(),
             platform: "macos-aarch64".into(),
@@ -2670,11 +2796,20 @@ mod tests {
             notify_when_ready: false,
             content_version: "built-in".into(),
             ui_source: "built-in".into(),
+            chatgpt_connection: ChatgptConnectionStatus {
+                phase: "connected".into(),
+                setup_opened_at: Some(1_786_838_100),
+                authorization_requested_at: Some(1_786_838_200),
+                oauth_completed_at: Some(1_786_838_300),
+                first_session_at: Some(1_786_838_400),
+                first_tool_success_at: None,
+            },
         };
         let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
         assert!(!json.contains("password"));
         assert!(!json.contains("token"));
         assert!(!json.contains("fileContent"));
+        assert!(json.contains("chatgptConnection"));
     }
 
     #[test]
@@ -2788,7 +2923,7 @@ mod tests {
                 unix_seconds: 1_786_838_400,
                 stage: "application_submit_failed".into(),
                 outcome: "error".into(),
-                app_version: "0.1.3-rc.12".into(),
+                app_version: "0.1.3-rc.13".into(),
                 error_code: Some("CONTROL_CONNECT".into()),
                 application_id: None,
                 device_nickname: Some("搭手·青柠-4827".into()),

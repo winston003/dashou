@@ -15,6 +15,7 @@ const source = await Promise.all([
   readFile(join(root, "src", "ErrorBoundary.tsx"), "utf8"),
   readFile(join(root, "src", "components", "SettingsView.tsx"), "utf8"),
   readFile(join(root, "src", "components", "TroubleshootingCard.tsx"), "utf8"),
+  readFile(join(root, "src", "components", "ChatGPTConnectGuide.tsx"), "utf8"),
 ]);
 const stylesheet = await readFile(join(root, "src", "styles.css"), "utf8");
 const catalog = JSON.parse(await readFile(join(root, "copy", "default.json"), "utf8"));
@@ -35,6 +36,8 @@ assert(allSource.includes("update_allowed_roots"), "UI must use transactional ro
 assert(allSource.includes("set_preferences"), "UI must persist preferences through the Bridge");
 assert(allSource.includes("ErrorBoundary"), "UI must have a crash fallback");
 assert(allSource.includes("installUpdate"), "desktop updates must be confirmed separately from update checks");
+assert(allSource.includes("mark_chatgpt_setup_opened"), "the connection guide must persist its progress through the Bridge");
+assert(allSource.includes("first_task_completed"), "the UI must distinguish a working ChatGPT task from local runtime readiness");
 assert(!source[6].includes("copy.currentVersion"), "the troubleshooting card must not repeat the app version");
 assert(!/class=["']version["']/.test(source[0]), "the use page must not repeat the version badge");
 assert(/\.toast\s*\{[^}]*opacity:\s*0/.test(stylesheet), "toast must be hidden until it has a message");
@@ -45,7 +48,7 @@ assert.equal(mainWindow?.height, 520, "default desktop height must remain 520px"
 assert.equal(mainWindow?.minWidth, 680, "minimum desktop width must remain 680px");
 assert.equal(mainWindow?.minHeight, 460, "minimum desktop height must remain 460px");
 assert.equal(catalog.schemaVersion, 1, "built-in copy schema must be version 1");
-for (const key of ["setupTitle", "startSetup", "readyTitle", "trustBody", "helpPath", "autostart"]) {
+for (const key of ["setupTitle", "startSetup", "readyTitle", "trustBody", "helpPath", "autostart", "connectChatGPT", "firstTaskPrompt"]) {
   assert.equal(typeof catalog.messages[key], "string", `missing built-in copy value: ${key}`);
 }
 console.log(`desktop UI structure ok: Preact entrypoint, Bridge v2 surfaces, ${Object.keys(catalog.messages).length} copy keys`);

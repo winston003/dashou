@@ -1,4 +1,4 @@
-import type { AccessStatus, CopyCatalog, DesktopSnapshot, RuntimePhase } from "./types";
+import type { AccessStatus, ChatGPTConnectionPhase, CopyCatalog, DesktopSnapshot, RuntimePhase } from "./types";
 
 export type TroubleshootingStep =
   | "not_applied"
@@ -87,4 +87,13 @@ export function formatLastChecked(unixSeconds: number): string {
 
 export function runtimePhaseForDiagnostics(snapshot: DesktopSnapshot | null): RuntimePhase | "unknown" {
   return snapshot?.runtimePhase ?? "unknown";
+}
+
+export function chatgptConnectionLabel(phase: ChatGPTConnectionPhase | undefined, copy: CopyCatalog): string {
+  if (phase === "setup_opened") return copy.chatgptSetupOpened;
+  if (phase === "authorization_requested") return copy.chatgptAuthorizationRequested;
+  if (phase === "oauth_completed") return copy.chatgptOauthCompleted;
+  if (phase === "connected") return copy.chatgptConnected;
+  if (phase === "first_task_completed") return copy.chatgptFirstTaskCompleted;
+  return copy.chatgptNotStarted;
 }

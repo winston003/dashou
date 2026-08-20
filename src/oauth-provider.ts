@@ -12,6 +12,7 @@ import type {
 import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
 import { JsonOAuthClientsStore, JsonOAuthStore } from "./dashou-oauth-store.js";
 import { createPilotAccessGate, type DashouPilotAccessGate, type DashouPilotPolicy } from "./dashou-pilot-policy.js";
+import { markConnectionMilestone } from "./connection-milestones.js";
 
 export interface OAuthConfig {
   ownerToken: string;
@@ -58,8 +59,7 @@ function formHtml(params: {
   resource?: URL;
   fields: Record<string, string | undefined>;
 }): string {
-  const scopeText = params.scopes.length > 0 ? params.scopes.join(" ") : "dashou";
-  const resourceText = params.resource?.href ?? "搭手 MCP";
+  const resourceText = params.resource?.href ?? "这台电脑上的搭手";
   const error = params.error
     ? `<p class="error">${htmlEscape(params.error)}</p>`
     : "";
@@ -69,42 +69,54 @@ function formHtml(params: {
     .join("\n");
 
   return `<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>连接搭手</title>
     <style>
-      body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
-      main { max-width: 440px; margin: 12vh auto; padding: 32px; background: #111827; border: 1px solid #334155; border-radius: 18px; box-shadow: 0 24px 80px rgba(0,0,0,.35); }
-      h1 { margin: 0 0 12px; font-size: 28px; }
-      p { line-height: 1.5; color: #cbd5e1; }
-      dl { padding: 16px; background: #020617; border-radius: 12px; }
-      dt { color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
-      dd { margin: 4px 0 12px; word-break: break-word; }
-      label { display: block; margin: 18px 0 8px; font-weight: 600; }
-      input { box-sizing: border-box; width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid #475569; background: #020617; color: #e2e8f0; font-size: 16px; }
-      button { margin-top: 18px; width: 100%; border: 0; border-radius: 10px; padding: 12px 14px; font-weight: 700; color: #020617; background: #38bdf8; cursor: pointer; }
-      .error { color: #fecaca; background: #7f1d1d; border-radius: 10px; padding: 10px 12px; }
-      .warning { color: #fde68a; }
+      :root { color: #302a25; background: #f6f1e8; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: radial-gradient(circle at 100% 0, #fffaf2 0, #f6f1e8 48%, #eee6da 100%); }
+      main { max-width: 520px; margin: 7vh auto; padding: 30px; background: rgba(255,255,255,.9); border: 1px solid #e3d8ca; border-radius: 20px; box-shadow: 0 24px 70px rgba(82,58,34,.12); }
+      .eyebrow { margin: 0 0 8px; color: #a56b40; font-size: 12px; font-weight: 800; letter-spacing: .12em; }
+      h1 { margin: 0; font-family: Georgia, serif; font-size: 30px; font-weight: 500; }
+      p { margin: 9px 0 0; color: #766b61; line-height: 1.65; }
+      ol { margin: 20px 0 0; padding: 16px 18px 16px 38px; border-radius: 14px; background: #fbf5ed; color: #5d5147; line-height: 1.9; }
+      dl { margin: 16px 0 0; padding: 13px 15px; border: 1px solid #eadfd2; border-radius: 12px; background: #fffdfa; }
+      dt { color: #9a8b7d; font-size: 12px; }
+      dd { margin: 3px 0 9px; overflow: hidden; color: #51463d; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+      label { display: block; margin: 20px 0 8px; font-weight: 700; }
+      input { width: 100%; padding: 13px 14px; border: 1px solid #cfbba9; border-radius: 10px; background: #fff; color: #302a25; font-size: 17px; }
+      input:focus { border-color: #9b6339; outline: 3px solid rgba(155,99,57,.14); }
+      button { width: 100%; margin-top: 14px; padding: 13px 14px; border: 0; border-radius: 10px; background: #9b6339; color: #fff; cursor: pointer; font-weight: 800; }
+      .error { padding: 10px 12px; border: 1px solid #e7b8ac; border-radius: 10px; background: #fff3ef; color: #9a493b; }
+      .trust { margin-top: 16px; padding-top: 14px; border-top: 1px solid #eee4d8; color: #8a7d70; font-size: 12px; }
+      @media (max-width: 600px) { main { margin: 0; min-height: 100vh; padding: 24px 20px; border: 0; border-radius: 0; } }
     </style>
   </head>
   <body>
     <main>
-      <h1>连接搭手</h1>
-      <p class="warning">只有在你主动让自己的 ChatGPT 连接这台电脑时才继续。搭手只允许访问你已授权的目录。</p>
+      <p class="eyebrow">连接 ChatGPT · 最后一步</p>
+      <h1>还差一次确认</h1>
+      <p>这页正在等待搭手客户端里的授权密码，不需要填写其他信息。</p>
       ${error}
+      <ol>
+        <li>回到搭手客户端</li>
+        <li>点击“复制授权密码”</li>
+        <li>回到本页粘贴，然后允许连接</li>
+      </ol>
       <dl>
-        <dt>连接来源</dt><dd>${htmlEscape(params.clientName)}</dd>
-        <dt>权限范围</dt><dd>${htmlEscape(scopeText)}</dd>
-        <dt>连接地址</dt><dd>${htmlEscape(resourceText)}</dd>
+        <dt>正在连接</dt><dd>${htmlEscape(params.clientName)}</dd>
+        <dt>连接到</dt><dd>${htmlEscape(resourceText)}</dd>
       </dl>
       <form method="post">
 ${hiddenFields}
-        <label for="owner_token">连接密码</label>
-        <input id="owner_token" name="owner_token" type="password" autocomplete="current-password" autofocus required />
+        <label for="owner_token">授权密码</label>
+        <input id="owner_token" name="owner_token" type="password" autocomplete="current-password" autofocus required placeholder="粘贴从搭手复制的密码" />
         <button type="submit">允许连接</button>
       </form>
+      <p class="trust">文件读取和修改仅限你选择的文件夹。运行项目命令时会使用你当前电脑账户的权限。</p>
     </main>
   </body>
 </html>`;
@@ -120,6 +132,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
   private readonly oauthStore: JsonOAuthStore;
   private readonly resourceServerUrl: URL;
   private readonly pilotGate: DashouPilotAccessGate;
+  private readonly stateDir: string;
 
   constructor(
     private readonly config: OAuthConfig,
@@ -127,6 +140,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     stateDir: string,
     pilotGate?: DashouPilotAccessGate,
   ) {
+    this.stateDir = stateDir;
     this.resourceServerUrl = resourceUrlFromServerUrl(resourceServerUrl);
     this.oauthStore = new JsonOAuthStore(stateDir);
     this.clientsStore = new JsonOAuthClientsStore(this.oauthStore, config.allowedRedirectHosts);
@@ -148,6 +162,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     }
 
     if (res.req.method !== "POST") {
+      markConnectionMilestone(this.stateDir, "authorization-requested");
       res.status(200).setHeader("Content-Type", "text/html; charset=utf-8");
       res.send(
         formHtml({
@@ -214,7 +229,9 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     }
 
     this.codes.delete(authorizationCode);
-    return this.issueTokens(client.client_id, record.params.scopes ?? this.config.scopes, record.params.resource);
+    const tokens = this.issueTokens(client.client_id, record.params.scopes ?? this.config.scopes, record.params.resource);
+    markConnectionMilestone(this.stateDir, "oauth-completed");
+    return tokens;
   }
 
   async exchangeRefreshToken(

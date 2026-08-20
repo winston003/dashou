@@ -154,7 +154,10 @@ test("OAuth + Streamable HTTP works end to end like a remote MCP host", async (t
   });
   const authorizePage = await fetch(`${baseUrl}/authorize?${authorizeParams}`);
   assert.equal(authorizePage.status, 200);
-  assert.match(await authorizePage.text(), /连接搭手/);
+  const authorizeHtml = await authorizePage.text();
+  assert.match(authorizeHtml, /还差一次确认/);
+  assert.match(authorizeHtml, /回到搭手客户端/);
+  assert.match(await readFile(join(root, ".state", "connection-authorization-requested"), "utf8"), /^\d+\n$/);
 
   const approval = await fetch(`${baseUrl}/authorize`, {
     method: "POST",
@@ -188,6 +191,7 @@ test("OAuth + Streamable HTTP works end to end like a remote MCP host", async (t
   const token = await tokenResponse.json() as { access_token: string; refresh_token: string };
   assert.ok(token.access_token);
   assert.ok(token.refresh_token);
+  assert.match(await readFile(join(root, ".state", "connection-oauth-completed"), "utf8"), /^\d+\n$/);
 
   const commonHeaders = {
     authorization: `Bearer ${token.access_token}`,
@@ -213,6 +217,7 @@ test("OAuth + Streamable HTTP works end to end like a remote MCP host", async (t
   assert.equal((initPayload.result as { serverInfo?: { name?: string } })?.serverInfo?.name, "dashou");
   const sessionId = initialize.headers.get("mcp-session-id");
   assert.ok(sessionId);
+  assert.match(await readFile(join(root, ".state", "connection-first-mcp-session"), "utf8"), /^\d+\n$/);
 
   await fetch(`${baseUrl}/mcp`, {
     method: "POST",
@@ -247,6 +252,7 @@ test("OAuth + Streamable HTTP works end to end like a remote MCP host", async (t
   const openedPayload = await rpcPayload(openedResponse);
   const workspaceId = (openedPayload.result as { structuredContent?: { workspaceId?: string } })?.structuredContent?.workspaceId;
   assert.ok(workspaceId);
+  assert.match(await readFile(join(root, ".state", "connection-first-tool-success"), "utf8"), /^\d+\n$/);
 
 });
 
