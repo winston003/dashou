@@ -252,9 +252,26 @@ export function App({ bridge = tauriBridge }: Props) {
 
   async function checkUpdate() {
     dispatch({ type: "busy", value: "update" });
-    try { const updated = await bridge.checkUpdate(); void bridge.recordEvent("update_checked"); toast(updated ? copy.updateReady : copy.alreadyLatest); }
+    try {
+      const update = await bridge.checkUpdate();
+      dispatch({ type: "availableUpdate", value: update });
+      void bridge.recordEvent("update_checked");
+      toast(update ? copy.updateFound : copy.alreadyLatest);
+    }
     catch { void bridge.recordEvent("update_checked", "error", "UPDATE_CHECK_FAILED"); toast(copy.updateUnavailable); }
     finally { dispatch({ type: "busy", value: null }); }
+  }
+
+  async function installUpdate() {
+    dispatch({ type: "busy", value: "installUpdate" });
+    try {
+      void bridge.recordEvent("update_install_started");
+      await bridge.installUpdate();
+    } catch {
+      void bridge.recordEvent("update_install_failed", "error", "UPDATE_INSTALL_FAILED");
+      toast(copy.updateInstallFailure);
+      dispatch({ type: "busy", value: null });
+    }
   }
 
   async function diagnostics() {
@@ -296,7 +313,7 @@ export function App({ bridge = tauriBridge }: Props) {
       </header>
 
       {state.tab === "settings" ? (
-        <SettingsView copy={copy} snapshot={snapshot} access={state.access} version={snapshot?.version ?? "0.1.3-rc.12"} preferences={state.preferences} busy={state.busy} onPreference={preference} onCheckUpdate={checkUpdate} onCopyDiagnostics={diagnostics} onCopyAddress={copyAddress} onImportInvite={importInvite} onConfigureAgain={() => dispatch({ type: "tab", tab: "use" })} />
+        <SettingsView copy={copy} snapshot={snapshot} access={state.access} version={snapshot?.version ?? "0.1.3-rc.12"} preferences={state.preferences} busy={state.busy} availableUpdate={state.availableUpdate} onPreference={preference} onCheckUpdate={checkUpdate} onInstallUpdate={installUpdate} onDismissUpdate={() => dispatch({ type: "availableUpdate", value: null })} onCopyDiagnostics={diagnostics} onCopyAddress={copyAddress} onImportInvite={importInvite} onConfigureAgain={() => dispatch({ type: "tab", tab: "use" })} />
       ) : (
         <div class="use-page">
           {showSetup ? (

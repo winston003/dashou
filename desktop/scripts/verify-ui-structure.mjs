@@ -14,6 +14,7 @@ const source = await Promise.all([
   readFile(join(root, "src", "main.tsx"), "utf8"),
   readFile(join(root, "src", "ErrorBoundary.tsx"), "utf8"),
   readFile(join(root, "src", "components", "SettingsView.tsx"), "utf8"),
+  readFile(join(root, "src", "components", "TroubleshootingCard.tsx"), "utf8"),
 ]);
 const stylesheet = await readFile(join(root, "src", "styles.css"), "utf8");
 const catalog = JSON.parse(await readFile(join(root, "copy", "default.json"), "utf8"));
@@ -33,14 +34,16 @@ assert(allSource.includes("confirmUiReady"), "UI must confirm downloaded content
 assert(allSource.includes("update_allowed_roots"), "UI must use transactional root updates");
 assert(allSource.includes("set_preferences"), "UI must persist preferences through the Bridge");
 assert(allSource.includes("ErrorBoundary"), "UI must have a crash fallback");
+assert(allSource.includes("installUpdate"), "desktop updates must be confirmed separately from update checks");
+assert(!source[6].includes("copy.currentVersion"), "the troubleshooting card must not repeat the app version");
 assert(!/class=["']version["']/.test(source[0]), "the use page must not repeat the version badge");
 assert(/\.toast\s*\{[^}]*opacity:\s*0/.test(stylesheet), "toast must be hidden until it has a message");
-assert(/min-width:\s*760px/.test(stylesheet), "desktop UI must support the minimum window width");
+assert(/min-width:\s*680px/.test(stylesheet), "desktop UI must support the minimum window width");
 const mainWindow = tauri.app?.windows?.find((window) => window.label === "main");
-assert.equal(mainWindow?.width, 880, "default desktop width must remain 880px");
-assert.equal(mainWindow?.height, 700, "default desktop height must remain 700px");
-assert.equal(mainWindow?.minWidth, 760, "minimum desktop width must remain 760px");
-assert.equal(mainWindow?.minHeight, 560, "minimum desktop height must remain 560px");
+assert.equal(mainWindow?.width, 800, "default desktop width must remain 800px");
+assert.equal(mainWindow?.height, 520, "default desktop height must remain 520px");
+assert.equal(mainWindow?.minWidth, 680, "minimum desktop width must remain 680px");
+assert.equal(mainWindow?.minHeight, 460, "minimum desktop height must remain 460px");
 assert.equal(catalog.schemaVersion, 1, "built-in copy schema must be version 1");
 for (const key of ["setupTitle", "startSetup", "readyTitle", "trustBody", "helpPath", "autostart"]) {
   assert.equal(typeof catalog.messages[key], "string", `missing built-in copy value: ${key}`);

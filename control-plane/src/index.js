@@ -30,6 +30,8 @@ const CLIENT_EVENT_STAGES = new Set([
   "runtime_recovering",
   "runtime_blocked",
   "update_checked",
+  "update_install_started",
+  "update_install_failed",
   "notification_enabled",
   "connection_ready",
   "diagnostics_copied",

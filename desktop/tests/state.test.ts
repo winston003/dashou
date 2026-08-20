@@ -139,3 +139,14 @@ test("a healthy snapshot clears a stale restart error", () => {
   });
   assert.equal(healthy.error, null);
 });
+
+test("an available update is kept for review before installation", () => {
+  const update = {
+    currentVersion: "0.1.3-rc.12",
+    version: "0.1.3-rc.13",
+    body: "连接更稳定，首次使用更简单。",
+  };
+  const found = reducer(initialState, { type: "availableUpdate", value: update });
+  assert.deepEqual(found.availableUpdate, update);
+  assert.equal(reducer(found, { type: "availableUpdate", value: null }).availableUpdate, null);
+});

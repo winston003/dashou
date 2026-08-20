@@ -1,4 +1,4 @@
-import type { AccessStatus, CopyCatalog, DesktopSnapshot, Preferences } from "../types";
+import type { AccessStatus, AvailableUpdate, CopyCatalog, DesktopSnapshot, Preferences } from "../types";
 import { TroubleshootingCard } from "./TroubleshootingCard";
 
 type Props = {
@@ -8,15 +8,18 @@ type Props = {
   version: string;
   preferences: Preferences;
   busy: string | null;
+  availableUpdate: AvailableUpdate | null;
   onPreference: (key: keyof Preferences, value: boolean) => void;
   onCheckUpdate: () => void;
+  onInstallUpdate: () => void;
+  onDismissUpdate: () => void;
   onCopyDiagnostics: () => void;
   onCopyAddress: () => void;
   onImportInvite: () => void;
   onConfigureAgain: () => void;
 };
 
-export function SettingsView({ copy, snapshot, access, version, preferences, busy, onPreference, onCheckUpdate, onCopyDiagnostics, onCopyAddress, onImportInvite, onConfigureAgain }: Props) {
+export function SettingsView({ copy, snapshot, access, version, preferences, busy, availableUpdate, onPreference, onCheckUpdate, onInstallUpdate, onDismissUpdate, onCopyDiagnostics, onCopyAddress, onImportInvite, onConfigureAgain }: Props) {
   return (
     <div class="settings-page">
       <section class="settings-card">
@@ -40,9 +43,20 @@ export function SettingsView({ copy, snapshot, access, version, preferences, bus
       <TroubleshootingCard snapshot={snapshot} access={access} copy={copy} onCopy={onCopyDiagnostics} />
       <section class="settings-card compact-card">
         <div class="setting-line"><span>{copy.currentVersion}</span><code>{version}</code></div>
-        <div class="settings-actions">
-          <button class="button button-secondary" type="button" disabled={busy === "update"} onClick={onCheckUpdate}>{busy === "update" ? copy.checkingUpdate : copy.checkUpdate}</button>
-        </div>
+        {availableUpdate ? (
+          <div class="update-preview" role="region" aria-labelledby="update-title">
+            <strong id="update-title">{copy.updateAvailable} {availableUpdate.version}</strong>
+            <p>{availableUpdate.body?.trim() || copy.updateNotesUnavailable}</p>
+            <div class="update-actions">
+              <button class="button button-secondary" type="button" disabled={busy === "installUpdate"} onClick={onDismissUpdate}>{copy.updateLater}</button>
+              <button class="button button-primary" type="button" disabled={busy === "installUpdate"} onClick={onInstallUpdate}>{busy === "installUpdate" ? copy.installingUpdate : copy.installUpdate}</button>
+            </div>
+          </div>
+        ) : (
+          <div class="settings-actions">
+            <button class="button button-secondary" type="button" disabled={busy === "update"} onClick={onCheckUpdate}>{busy === "update" ? copy.checkingUpdate : copy.checkUpdate}</button>
+          </div>
+        )}
       </section>
       <details class="advanced-card">
         <summary>{copy.advanced}</summary>

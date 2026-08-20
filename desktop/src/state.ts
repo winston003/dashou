@@ -1,4 +1,4 @@
-import type { AccessStatus, DesktopSnapshot, Preferences, RuntimePhase } from "./types";
+import type { AccessStatus, AvailableUpdate, DesktopSnapshot, Preferences, RuntimePhase } from "./types";
 
 export type Tab = "use" | "settings";
 
@@ -14,6 +14,7 @@ export type AppState = {
   toast: string | null;
   error: string | null;
   preferences: Preferences;
+  availableUpdate: AvailableUpdate | null;
 };
 
 export const initialState: AppState = {
@@ -28,6 +29,7 @@ export const initialState: AppState = {
   toast: null,
   error: null,
   preferences: { launchAtLogin: true, notifyWhenReady: false },
+  availableUpdate: null,
 };
 
 export type Action =
@@ -40,7 +42,8 @@ export type Action =
   | { type: "help"; value: boolean }
   | { type: "toast"; value: string | null }
   | { type: "error"; value: string | null }
-  | { type: "preferences"; value: Preferences };
+  | { type: "preferences"; value: Preferences }
+  | { type: "availableUpdate"; value: AvailableUpdate | null };
 
 export function phaseLabel(phase: RuntimePhase): "preparing" | "connecting" | "ready" | "recovering" | "blocked" | "stopped" {
   if (phase === "starting") return "preparing";
@@ -131,6 +134,8 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, error: action.value };
     case "preferences":
       return { ...state, preferences: action.value };
+    case "availableUpdate":
+      return { ...state, availableUpdate: action.value };
     default:
       return state;
   }

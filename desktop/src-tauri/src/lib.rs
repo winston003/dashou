@@ -301,6 +301,8 @@ const DIAGNOSTIC_STAGES: &[&str] = &[
     "runtime_recovering",
     "runtime_blocked",
     "update_checked",
+    "update_install_started",
+    "update_install_failed",
     "notification_enabled",
     "connection_ready",
     "diagnostics_copied",
@@ -2824,6 +2826,14 @@ mod tests {
         )
         .is_ok());
         assert!(validate_diagnostic_event("custom_path", "ok", None, None).is_err());
+        assert!(validate_diagnostic_event("update_install_started", "ok", None, None).is_ok());
+        assert!(validate_diagnostic_event(
+            "update_install_failed",
+            "error",
+            Some("UPDATE_INSTALL_FAILED"),
+            None
+        )
+        .is_ok());
         assert!(validate_diagnostic_event(
             "application_submit_failed",
             "error",

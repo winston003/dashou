@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultCopy } from "../src/copy";
-import { applicationStatusLabel, platformLabel, troubleshootingStatus, troubleshootingStep, troubleshootingStepLabel } from "../src/diagnostics";
+import { applicationStatusLabel, platformLabel, troubleshootingNeedsAttention, troubleshootingStatus, troubleshootingStep, troubleshootingStepLabel } from "../src/diagnostics";
 import type { DesktopSnapshot } from "../src/types";
 
 const snapshot = (overrides: Partial<DesktopSnapshot> = {}): DesktopSnapshot => ({
@@ -46,4 +46,11 @@ test("application status stays human-readable", () => {
   assert.equal(applicationStatusLabel("not_applied", defaultCopy), "还没有开始");
   assert.equal(applicationStatusLabel("approved", defaultCopy), "已经准备好");
   assert.equal(applicationStatusLabel("revoked", defaultCopy), "已结束");
+});
+
+test("troubleshooting stays folded unless the user needs to act", () => {
+  assert.equal(troubleshootingNeedsAttention({ status: "activated" }, snapshot()), false);
+  assert.equal(troubleshootingNeedsAttention({ status: "pending" }, snapshot({ configured: false, runtimePhase: "needs_setup" })), false);
+  assert.equal(troubleshootingNeedsAttention({ status: "activated" }, snapshot({ runtimePhase: "blocked" })), true);
+  assert.equal(troubleshootingNeedsAttention({ status: "rejected" }, snapshot()), true);
 });

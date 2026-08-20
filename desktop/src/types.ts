@@ -105,6 +105,13 @@ export type CopyCatalog = {
   checkUpdate: string;
   checkingUpdate: string;
   updateReady: string;
+  updateFound: string;
+  updateAvailable: string;
+  updateNotesUnavailable: string;
+  updateLater: string;
+  installUpdate: string;
+  installingUpdate: string;
+  updateInstallFailure: string;
   alreadyLatest: string;
   advanced: string;
   importInvite: string;
@@ -179,4 +186,11 @@ export type CopyCatalog = {
 export type Preferences = {
   launchAtLogin: boolean;
   notifyWhenReady: boolean;
+};
+
+export type AvailableUpdate = {
+  currentVersion: string;
+  version: string;
+  body?: string;
+  date?: string;
 };

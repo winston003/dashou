@@ -2,11 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
-import { check } from "@tauri-apps/plugin-updater";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
-import type { AccessStatus, DesktopSnapshot, Preferences } from "./types";
+import type { AccessStatus, AvailableUpdate, DesktopSnapshot, Preferences } from "./types";
 
 export const CHATGPT_APPS_URL = "https://chatgpt.com/plugins?view=personal";
 
@@ -28,10 +28,13 @@ export type Bridge = {
   importInvite(title: string): Promise<void>;
   openChatGPT(): Promise<void>;
   copy(value: string): Promise<void>;
-  checkUpdate(): Promise<boolean>;
+  checkUpdate(): Promise<AvailableUpdate | null>;
+  installUpdate(): Promise<void>;
   enableNotifications(): Promise<boolean>;
   notifyReady(title: string, body: string): Promise<void>;
 };
+
+let pendingUpdate: Update | null = null;
 
 export type BridgeError = Error & {
   code?: string;
@@ -104,11 +107,19 @@ export const tauriBridge: Bridge = {
   openChatGPT: () => openExternal(CHATGPT_APPS_URL),
   copy: (value) => writeText(value),
   checkUpdate: async () => {
-    const update = await check();
-    if (!update) return false;
-    await update.downloadAndInstall();
+    pendingUpdate = await check();
+    if (!pendingUpdate) return null;
+    return {
+      currentVersion: pendingUpdate.currentVersion,
+      version: pendingUpdate.version,
+      body: pendingUpdate.body,
+      date: pendingUpdate.date,
+    };
+  },
+  installUpdate: async () => {
+    if (!pendingUpdate) throw new Error("UPDATE_NOT_READY");
+    await pendingUpdate.downloadAndInstall();
     await relaunch();
-    return true;
   },
   enableNotifications: async () => {
     let granted = await isPermissionGranted();

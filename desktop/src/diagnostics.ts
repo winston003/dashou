@@ -11,6 +11,14 @@ export type TroubleshootingStep =
   | "other_connection"
   | "needs_attention";
 
+export function troubleshootingNeedsAttention(access: AccessStatus, snapshot: DesktopSnapshot | null): boolean {
+  return Boolean(
+    snapshot?.error
+      || snapshot?.runtimePhase === "blocked"
+      || ["rejected", "expired", "revoked"].includes(access.status),
+  );
+}
+
 export function troubleshootingStep(access: AccessStatus, snapshot: DesktopSnapshot | null): TroubleshootingStep {
   if (snapshot?.error?.code === "OTHER_PROCESS") return "other_connection";
   if (access.status === "not_applied") return "not_applied";

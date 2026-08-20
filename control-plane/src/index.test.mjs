@@ -266,6 +266,19 @@ test("client progress signals are authenticated, deduplicated and visible to the
     outcome: "ok",
     appVersion: "0.1.3-rc.12",
     unixSeconds: 1_786_838_401,
+  }, {
+    eventId: "evt_updateinstall12345",
+    stage: "update_install_started",
+    outcome: "ok",
+    appVersion: "0.1.3-rc.12",
+    unixSeconds: 1_786_838_402,
+  }, {
+    eventId: "evt_updatefailed12345",
+    stage: "update_install_failed",
+    outcome: "error",
+    errorCode: "UPDATE_INSTALL_FAILED",
+    appVersion: "0.1.3-rc.12",
+    unixSeconds: 1_786_838_403,
   }];
   assert.equal((await request("POST", `/applications/${created.applicationId}/events`, { env, body: { events } })).status, 401);
   const accepted = await request("POST", `/applications/${created.applicationId}/events`, {
@@ -273,7 +286,7 @@ test("client progress signals are authenticated, deduplicated and visible to the
     token: applicationToken,
     body: { events },
   });
-  assert.deepEqual(await accepted.json(), { accepted: 2 });
+  assert.deepEqual(await accepted.json(), { accepted: 4 });
   await request("POST", `/applications/${created.applicationId}/events`, {
     env,
     token: applicationToken,
@@ -281,10 +294,12 @@ test("client progress signals are authenticated, deduplicated and visible to the
   });
   const detail = await request("GET", `/admin/applications/${created.applicationId}`, { env, token: ADMIN_TOKEN });
   const payload = await detail.json();
-  assert.equal(payload.events.length, 2);
+  assert.equal(payload.events.length, 4);
   assert.equal(payload.events[0].stage, "app_opened");
   assert.equal(payload.events[0].deviceNickname, "搭手·薄荷-1304");
   assert.equal(payload.events[0].deviceFingerprint, "1A2B-3C4D");
+  assert.equal(payload.events[2].stage, "update_install_started");
+  assert.equal(payload.events[3].stage, "update_install_failed");
   assert.equal(JSON.stringify(payload).includes(applicationToken), false);
 });
 

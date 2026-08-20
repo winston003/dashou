@@ -14,10 +14,10 @@
       {
         "label": "main",
         "title": "搭手 Dashou",
-        "width": 880,
-        "height": 700,
-        "minWidth": 760,
-        "minHeight": 560,
+        "width": 800,
+        "height": 520,
+        "minWidth": 680,
+        "minHeight": 460,
         "resizable": true,
         "visible": false
       }
