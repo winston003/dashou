@@ -23,7 +23,7 @@ test("admin CLI lists and approves device applications from any working director
         response.end(JSON.stringify({ applications: [{
           applicationId: "req_testapplication1234",
           status: "pending",
-          deviceName: "Alice Mac",
+          deviceName: "Alice\u001b[2JMac",
           platform: "macos-arm64",
           createdAt: "2026-08-16T00:00:00.000Z",
         }] }));
@@ -69,7 +69,8 @@ test("admin CLI lists and approves device applications from any working director
   const script = new URL("./pilot-admin.mjs", import.meta.url);
   const listed = await execFileAsync(process.execPath, [script.pathname, "applications", "list"], { cwd: "/tmp", env });
   assert.match(listed.stdout, /待审核申请（1）/);
-  assert.match(listed.stdout, /Alice Mac/);
+  assert.match(listed.stdout, /Alice\\u001b\[2JMac/);
+  assert.equal(listed.stdout.includes("\u001b"), false);
   const inspected = await execFileAsync(process.execPath, [script.pathname, "applications", "inspect", "req_testapplication1234"], { cwd: "/tmp", env });
   assert.match(inspected.stdout, /状态时间线/);
   assert.match(inspected.stdout, /控制面收到申请/);

@@ -215,7 +215,7 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToo
       description: [
         "在已打开项目中执行命令，用于测试、构建、Git 检查、搜索和目录查看。",
         "不要通过 execute 修改项目文件；文件变更使用 write/edit。",
-        "execute 不是操作系统沙箱，会继承本地用户权限；V0 仅拦截少数明显危险命令。",
+        "只有用户在搭手设置中主动开启项目命令后才能使用。execute 不是操作系统沙箱，会使用本地用户权限，但不会继承搭手服务或云端凭据。",
       ].join(" "),
       inputSchema: {
         workspaceId: z.string(),

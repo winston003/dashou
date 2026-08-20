@@ -131,13 +131,6 @@ export function App({ bridge = tauriBridge }: Props) {
 
   useEffect(() => {
     void bridge.copyCatalog().then(setCopy).catch(() => undefined);
-    void bridge.snapshot().then((value) => {
-      if (value.uiSource === "downloaded" && value.contentVersion !== "built-in") {
-        void bridge.confirmUiReady(value.contentVersion);
-      }
-    }).catch(() => undefined);
-    const idleUpdate = window.setTimeout(() => void bridge.checkContentUpdates().then((messages) => { if (messages) setCopy(messages); }).catch(() => undefined), 20_000);
-    return () => window.clearTimeout(idleUpdate);
   }, [bridge]);
 
   const snapshot = state.snapshot;
@@ -294,7 +287,7 @@ export function App({ bridge = tauriBridge }: Props) {
       }
       const updated = await bridge.setPreferences({ [key]: value });
       dispatch({ type: "snapshot", snapshot: updated });
-      dispatch({ type: "preferences", value: { launchAtLogin: updated.launchAtLogin, notifyWhenReady: updated.notifyWhenReady } });
+      dispatch({ type: "preferences", value: { launchAtLogin: updated.launchAtLogin, notifyWhenReady: updated.notifyWhenReady, allowProjectCommands: updated.allowProjectCommands } });
       if (key === "notifyWhenReady" && value) void bridge.recordEvent("notification_enabled");
     } catch (error) { dispatch({ type: "error", value: friendlyError(error, copy.settingsSaveFailure, copy) }); }
     finally { dispatch({ type: "busy", value: null }); }
@@ -375,7 +368,7 @@ export function App({ bridge = tauriBridge }: Props) {
       </header>
 
       {state.tab === "settings" ? (
-        <SettingsView copy={copy} snapshot={snapshot} access={state.access} version={snapshot?.version ?? "0.1.3-rc.13"} preferences={state.preferences} busy={state.busy} availableUpdate={state.availableUpdate} onPreference={preference} onCheckUpdate={checkUpdate} onInstallUpdate={installUpdate} onDismissUpdate={() => dispatch({ type: "availableUpdate", value: null })} onCopyDiagnostics={diagnostics} onCopyAddress={copyAddress} onImportInvite={importInvite} onConfigureAgain={() => dispatch({ type: "tab", tab: "use" })} />
+        <SettingsView copy={copy} snapshot={snapshot} access={state.access} version={snapshot?.version ?? "0.1.3-rc.14"} preferences={state.preferences} busy={state.busy} availableUpdate={state.availableUpdate} onPreference={preference} onCheckUpdate={checkUpdate} onInstallUpdate={installUpdate} onDismissUpdate={() => dispatch({ type: "availableUpdate", value: null })} onCopyDiagnostics={diagnostics} onCopyAddress={copyAddress} onImportInvite={importInvite} onConfigureAgain={() => dispatch({ type: "tab", tab: "use" })} />
       ) : (
         <div class="use-page">
           {showSetup ? (

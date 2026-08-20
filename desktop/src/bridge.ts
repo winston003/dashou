@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open } from "@tauri-apps/plugin-dialog";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
@@ -79,9 +78,7 @@ export const tauriBridge: Bridge = {
   copyCatalog: async () => (await invokeCommand<{ messages: Record<string, string> }>("copy_bundle")).messages,
   confirmUiReady: (version) => invokeCommand("ui_ready", { version }),
   checkContentUpdates: async () => {
-    const result = await invokeCommand<{ messages: Record<string, string> }>("check_copy_update");
-    await invokeCommand("check_ui_update");
-    return result.messages;
+    return (await invokeCommand<{ messages: Record<string, string> }>("check_copy_update")).messages;
   },
   applyForAccess: () => invokeCommand<AccessStatus>("apply_for_access"),
   applicationStatus: () => invokeCommand<AccessStatus>("application_status"),
@@ -106,7 +103,7 @@ export const tauriBridge: Bridge = {
     const selected = await open({ multiple: false, title, filters: [{ name: title, extensions: ["json"] }] });
     if (typeof selected === "string") await invokeCommand("import_invite", { path: selected });
   },
-  openChatGPT: () => openExternal(CHATGPT_APPS_URL),
+  openChatGPT: () => invokeCommand("open_chatgpt"),
   copy: (value) => writeText(value),
   checkUpdate: async () => {
     pendingUpdate = await check();

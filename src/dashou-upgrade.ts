@@ -1,16 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { execFile as execFileCallback } from "node:child_process";
-import { promisify } from "node:util";
 
 // The desktop release uses Tauri's `latest.json`; keep the CLI manifest separate.
 export const DEFAULT_UPDATE_MANIFEST_URL = "https://github.com/winston003/dashou-releases/releases/latest/download/cli-latest.json";
 const TRUSTED_GITHUB_RELEASE_PREFIX = "https://github.com/winston003/dashou-releases/releases/download/";
 const TRUSTED_NPM_REGISTRY_HOST = "registry.npmjs.org";
 const MAX_PACKAGE_BYTES = 100 * 1024 * 1024;
-const execFile = promisify(execFileCallback);
 
 export interface DashouUpdatePlatform {
   url?: string;
@@ -149,20 +143,9 @@ export async function downloadAndVerifyPackage(
 
 export async function installCliUpdate(
   check: DashouUpdateCheck,
-  execFileImpl: typeof execFile = execFile,
-  fetchImpl: typeof fetch = fetch,
-): Promise<void> {
+): Promise<never> {
   if (!check.updateAvailable) throw new Error("No Dashou CLI update is available");
-  if (!check.downloadUrl || !check.packageSha256) throw new Error("Dashou CLI manifest does not provide a verified package");
-  const bytes = await downloadAndVerifyPackage(check.downloadUrl, check.packageSha256, fetchImpl);
-  const tempDir = await mkdtemp(join(tmpdir(), "dashou-upgrade-"));
-  const packagePath = join(tempDir, "dashou-cli.tgz");
-  try {
-    await writeFile(packagePath, bytes, { mode: 0o600 });
-    await execFileImpl("npm", ["install", "--global", packagePath], { maxBuffer: 4 * 1024 * 1024 });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  throw new Error("CLI 自动安装已暂停：当前更新清单还没有独立发布签名。请从 GitHub Release 获取安装包，或使用 npm 的明确版本号安装");
 }
 
 function isSha256(value: unknown): value is string {

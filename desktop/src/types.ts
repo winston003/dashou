@@ -46,6 +46,7 @@ export type DesktopSnapshot = {
   error?: UiError;
   launchAtLogin: boolean;
   notifyWhenReady: boolean;
+  allowProjectCommands: boolean;
   contentVersion: string;
   uiSource: "built-in" | "downloaded";
   chatgptConnection?: ChatGPTConnectionStatus;
@@ -120,6 +121,8 @@ export type CopyCatalog = {
   autostartHint: string;
   notifications: string;
   notificationsHint: string;
+  projectCommands: string;
+  projectCommandsHint: string;
   checkUpdate: string;
   checkingUpdate: string;
   updateReady: string;
@@ -250,6 +253,7 @@ export type CopyCatalog = {
 export type Preferences = {
   launchAtLogin: boolean;
   notifyWhenReady: boolean;
+  allowProjectCommands: boolean;
 };
 
 export type AvailableUpdate = {

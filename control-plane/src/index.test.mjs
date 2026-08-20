@@ -62,6 +62,21 @@ test("Worker control plane does not expose admin operations without the admin se
   assert.equal(response.status, 401);
 });
 
+test("public application fields reject terminal control characters", async () => {
+  const env = { DB: new FakeD1(), PILOT_ADMIN_TOKEN: ADMIN_TOKEN };
+  const response = await request("POST", "/applications", {
+    env,
+    body: {
+      applicationToken: "A".repeat(43),
+      deviceId: `dev_${"c".repeat(24)}`,
+      deviceName: "Alice\u001b[2JMac",
+      platform: "macos-arm64",
+    },
+  });
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).error, /control characters/);
+});
+
 test("device application can be approved, safely activated, confirmed and revoked", async () => {
   const db = new FakeD1();
   const env = {
@@ -258,26 +273,26 @@ test("client progress signals are authenticated, deduplicated and visible to the
     eventId: "evt_abcdefghijklmnop",
     stage: "app_opened",
     outcome: "ok",
-    appVersion: "0.1.3-rc.13",
+    appVersion: "0.1.3-rc.14",
     unixSeconds: 1_786_838_400,
   }, {
     eventId: "evt_qrstuvwxyz12345",
     stage: "application_submitted",
     outcome: "ok",
-    appVersion: "0.1.3-rc.13",
+    appVersion: "0.1.3-rc.14",
     unixSeconds: 1_786_838_401,
   }, {
     eventId: "evt_updateinstall12345",
     stage: "update_install_started",
     outcome: "ok",
-    appVersion: "0.1.3-rc.13",
+    appVersion: "0.1.3-rc.14",
     unixSeconds: 1_786_838_402,
   }, {
     eventId: "evt_updatefailed12345",
     stage: "update_install_failed",
     outcome: "error",
     errorCode: "UPDATE_INSTALL_FAILED",
-    appVersion: "0.1.3-rc.13",
+    appVersion: "0.1.3-rc.14",
     unixSeconds: 1_786_838_403,
   }];
   assert.equal((await request("POST", `/applications/${created.applicationId}/events`, { env, body: { events } })).status, 401);
@@ -393,7 +408,7 @@ test("Worker health exposes the deployment build SHA", async () => {
   assert.deepEqual(await response.json(), {
     ok: true,
     name: "dashou-pilot-control",
-    version: "0.1.3-rc.13",
+    version: "0.1.3-rc.14",
     buildSha: "abc123",
   });
 });

@@ -14,7 +14,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { expandHome } from "./dashou-config.js";
-import { runtimeEnvironment } from "./dashou-runtime-contract.js";
+import { userCommandEnvironment } from "./dashou-runtime-contract.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_READ_BYTES = 2 * 1024 * 1024;
@@ -66,8 +66,15 @@ export interface CommandResult {
 export class DashouWorkspaceRegistry {
   private readonly workspaces = new Map<string, DashouWorkspace>();
   private readonly projectIds = new Map<string, string>();
+  private readonly allowProjectCommands: boolean;
 
-  constructor(private readonly allowedRoots: string[]) {}
+  constructor(
+    private readonly allowedRoots: string[],
+    options: { allowProjectCommands?: boolean } = {},
+  ) {
+    this.allowProjectCommands = options.allowProjectCommands
+      ?? process.env.DASHOU_ALLOW_PROJECT_COMMANDS === "1";
+  }
 
   async listProjects(): Promise<DashouProject[]> {
     const projects: DashouProject[] = [];
@@ -199,6 +206,9 @@ export class DashouWorkspaceRegistry {
     workingDirectory?: string,
     timeoutSeconds = 30,
   ): Promise<CommandResult> {
+    if (!this.allowProjectCommands) {
+      throw new Error("这台电脑尚未允许项目命令。请打开搭手 → 设置，开启“允许 ChatGPT 运行项目命令”后再试。");
+    }
     const workspace = this.requireWorkspace(workspaceId);
     if (!command.trim()) throw new Error("command must not be empty");
     if (timeoutSeconds < 1 || timeoutSeconds > 300) throw new Error("timeoutSeconds must be between 1 and 300");
@@ -215,7 +225,7 @@ export class DashouWorkspaceRegistry {
         timeout: timeoutSeconds * 1000,
         maxBuffer: MAX_COMMAND_BUFFER,
         encoding: "utf8",
-        env: { ...runtimeEnvironment(), PWD: cwd },
+        env: { ...userCommandEnvironment(), PWD: cwd },
       });
       return boundedCommandResult(result.stdout, result.stderr, 0);
     } catch (error) {

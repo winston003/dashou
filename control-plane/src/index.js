@@ -6,7 +6,7 @@ const APPLICATION_ID_PATTERN = /^req_[A-Za-z0-9_-]{16,64}$/;
 const DEVICE_ID_PATTERN = /^dev_[A-Za-z0-9_-]{16,96}$/;
 const APPLICATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/;
 const PERIODS = new Set(["week", "month", "quarter", "year"]);
-const CONTROL_PLANE_VERSION = "0.1.3-rc.13";
+const CONTROL_PLANE_VERSION = "0.1.3-rc.14";
 const DEFAULT_LEASE_TTL_SECONDS = 15 * 60;
 const RESET_CONFIRMATION = "DELETE_ALL_DASHOU_PILOT_DATA";
 const CLIENT_EVENT_ID_PATTERN = /^evt_[A-Za-z0-9_-]{12,96}$/;
@@ -119,13 +119,13 @@ async function createApplication(request, env) {
   if (!APPLICATION_TOKEN_PATTERN.test(applicationToken)) throw new HttpError(400, "applicationToken must be a base64url secret of at least 32 bytes");
   const deviceId = requiredString(body.deviceId, "deviceId");
   if (!DEVICE_ID_PATTERN.test(deviceId)) throw new HttpError(400, "deviceId is invalid");
-  const deviceName = limitedString(body.deviceName, "deviceName", 100);
+  const deviceName = limitedDisplayString(body.deviceName, "deviceName", 100);
   const deviceNickname = body.deviceNickname == null ? null : limitedString(body.deviceNickname, "deviceNickname", 40);
   if (deviceNickname && !DEVICE_NICKNAME_PATTERN.test(deviceNickname)) throw new HttpError(400, "deviceNickname is invalid");
   const deviceFingerprint = body.deviceFingerprint == null ? null : limitedString(body.deviceFingerprint, "deviceFingerprint", 20);
   if (deviceFingerprint && !DEVICE_FINGERPRINT_PATTERN.test(deviceFingerprint)) throw new HttpError(400, "deviceFingerprint is invalid");
-  const platform = limitedString(body.platform, "platform", 40);
-  const contact = optionalLimitedString(body.contact, "contact", 200);
+  const platform = limitedDisplayString(body.platform, "platform", 40);
+  const contact = optionalLimitedDisplayString(body.contact, "contact", 200);
   const tokenHash = await sha256Base64Url(applicationToken);
 
   const existing = await env.DB.prepare(
@@ -572,6 +572,20 @@ function optionalLimitedString(value, field, maxLength) {
   const text = value.trim();
   if (!text) return undefined;
   if (text.length > maxLength) throw new HttpError(400, `${field} must be at most ${maxLength} characters`);
+  return text;
+}
+
+const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u;
+
+function limitedDisplayString(value, field, maxLength) {
+  const text = limitedString(value, field, maxLength);
+  if (UNSAFE_DISPLAY_CHARACTERS.test(text)) throw new HttpError(400, `${field} contains unsupported control characters`);
+  return text;
+}
+
+function optionalLimitedDisplayString(value, field, maxLength) {
+  const text = optionalLimitedString(value, field, maxLength);
+  if (text && UNSAFE_DISPLAY_CHARACTERS.test(text)) throw new HttpError(400, `${field} contains unsupported control characters`);
   return text;
 }
 

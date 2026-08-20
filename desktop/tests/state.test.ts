@@ -7,7 +7,7 @@ test("snapshot hydrates roots and preferences without secrets", () => {
   const next = reducer(initialState, {
     type: "snapshot",
     snapshot: {
-      version: "0.1.3-rc.13",
+      version: "0.1.3-rc.14",
       deviceNickname: "搭手·青柠-4827",
       deviceFingerprint: "7F3A-91C2",
       platform: "macos-aarch64",
@@ -21,6 +21,7 @@ test("snapshot hydrates roots and preferences without secrets", () => {
       recoveryAttempts: 0,
       launchAtLogin: true,
       notifyWhenReady: false,
+      allowProjectCommands: false,
       contentVersion: "built-in",
       uiSource: "built-in",
     },
@@ -28,6 +29,7 @@ test("snapshot hydrates roots and preferences without secrets", () => {
   assert.deepEqual(next.selectedRoots, ["/work/one", "/work/two"]);
   assert.equal(next.rootsDirty, false);
   assert.equal(next.preferences.launchAtLogin, true);
+  assert.equal(next.preferences.allowProjectCommands, false);
   assert.equal("password" in next.snapshot!, false);
 });
 
@@ -42,7 +44,7 @@ test("background snapshots do not overwrite folders being edited", () => {
   const hydrated = reducer(initialState, {
     type: "snapshot",
     snapshot: {
-      version: "0.1.3-rc.13",
+      version: "0.1.3-rc.14",
       deviceNickname: "搭手·青柠-4827",
       deviceFingerprint: "7F3A-91C2",
       platform: "macos-aarch64",
@@ -55,6 +57,7 @@ test("background snapshots do not overwrite folders being edited", () => {
       recoveryAttempts: 0,
       launchAtLogin: true,
       notifyWhenReady: false,
+      allowProjectCommands: false,
       contentVersion: "built-in",
       uiSource: "built-in",
     },
@@ -129,7 +132,7 @@ test("a healthy snapshot clears a stale restart error", () => {
   const healthy = reducer(withError, {
     type: "snapshot",
     snapshot: {
-      version: "0.1.3-rc.13",
+      version: "0.1.3-rc.14",
       deviceNickname: "搭手·青柠-4827",
       deviceFingerprint: "7F3A-91C2",
       platform: "macos-aarch64",
@@ -142,6 +145,7 @@ test("a healthy snapshot clears a stale restart error", () => {
       recoveryAttempts: 0,
       launchAtLogin: true,
       notifyWhenReady: false,
+      allowProjectCommands: false,
       contentVersion: "built-in",
       uiSource: "built-in",
     },
@@ -151,8 +155,8 @@ test("a healthy snapshot clears a stale restart error", () => {
 
 test("an available update is kept for review before installation", () => {
   const update = {
-    currentVersion: "0.1.3-rc.13",
-    version: "0.1.3-rc.13",
+    currentVersion: "0.1.3-rc.14",
+    version: "0.1.3-rc.15",
     body: "连接更稳定，首次使用更简单。",
   };
   const found = reducer(initialState, { type: "availableUpdate", value: update });

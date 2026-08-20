@@ -154,6 +154,9 @@ test("OAuth + Streamable HTTP works end to end like a remote MCP host", async (t
   });
   const authorizePage = await fetch(`${baseUrl}/authorize?${authorizeParams}`);
   assert.equal(authorizePage.status, 200);
+  assert.equal(authorizePage.headers.get("x-frame-options"), "DENY");
+  assert.match(authorizePage.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
+  assert.equal(authorizePage.headers.get("cache-control"), "no-store");
   const authorizeHtml = await authorizePage.text();
   assert.match(authorizeHtml, /还差一次确认/);
   assert.match(authorizeHtml, /回到搭手客户端/);

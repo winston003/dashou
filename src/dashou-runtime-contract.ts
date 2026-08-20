@@ -85,6 +85,51 @@ export function runtimeEnvironment(
   };
 }
 
+const USER_COMMAND_ENVIRONMENT_KEYS = [
+  "APPDATA",
+  "COMSPEC",
+  "HOME",
+  "LANG",
+  "LOCALAPPDATA",
+  "LOGNAME",
+  "PATHEXT",
+  "SHELL",
+  "SYSTEMDRIVE",
+  "SYSTEMROOT",
+  "TEMP",
+  "TERM",
+  "TMP",
+  "TMPDIR",
+  "USER",
+  "USERNAME",
+  "WINDIR",
+] as const;
+
+/**
+ * Environment exposed to project commands.
+ *
+ * The Dashou daemon needs control-plane, tunnel, and application credentials,
+ * but a project command must never inherit that ambient authority. Keep this
+ * list intentionally small; project-specific values should be supplied by the
+ * project itself instead of copied from the long-lived service process.
+ */
+export function userCommandEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+  runtimeExecPath = process.execPath,
+  platform = process.platform,
+): NodeJS.ProcessEnv {
+  const sanitized: NodeJS.ProcessEnv = {};
+  for (const key of USER_COMMAND_ENVIRONMENT_KEYS) {
+    const value = environment[key];
+    if (value !== undefined) sanitized[key] = value;
+  }
+  for (const [key, value] of Object.entries(environment)) {
+    if (/^LC_[A-Z0-9_]+$/.test(key) && value !== undefined) sanitized[key] = value;
+  }
+  sanitized.PATH = runtimeExecutablePath(runtimeExecPath, environment.PATH ?? "", platform);
+  return sanitized;
+}
+
 export function runtimeContractReport(env: NodeJS.ProcessEnv = process.env, runtimeExecPath = process.execPath, nodeVersion = process.version, nodeAbi = process.versions.modules): DashouRuntimeContractReport {
   const inheritedPath = env.PATH ?? "";
   const pathNodeExecutable = findPathExecutable("node", inheritedPath);

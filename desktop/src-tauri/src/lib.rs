@@ -66,6 +66,7 @@ fn hide_windows_console(command: &mut Command) -> &mut Command {
 }
 
 const CONTROL_BASE_URL: &str = "https://dashou-pilot-control.whilewon.workers.dev";
+const CHATGPT_APPS_URL: &str = "https://chatgpt.com/plugins?view=personal";
 const LEGACY_PILOT_POLICY_URL: &str =
     "https://dashou-pilot-control.whilewon.workers.dev/pilot-policy";
 const LEGACY_PILOT_POLICY_PUBLIC_KEY: &str = r#"-----BEGIN PUBLIC KEY-----
@@ -121,6 +122,7 @@ struct DesktopSnapshot {
     error: Option<UiError>,
     launch_at_login: bool,
     notify_when_ready: bool,
+    allow_project_commands: bool,
     content_version: String,
     ui_source: String,
     chatgpt_connection: ChatgptConnectionStatus,
@@ -144,6 +146,8 @@ struct StoredPreferences {
     launch_at_login: bool,
     #[serde(default)]
     notify_when_ready: bool,
+    #[serde(default)]
+    allow_project_commands: bool,
 }
 
 fn default_true() -> bool {
@@ -489,6 +493,7 @@ async fn desktop_snapshot_for(
         error,
         launch_at_login: prefs.launch_at_login,
         notify_when_ready: prefs.notify_when_ready,
+        allow_project_commands: prefs.allow_project_commands,
         content_version: ui.version.unwrap_or_else(|| "built-in".into()),
         ui_source: ui.source.into(),
         chatgpt_connection: read_chatgpt_connection_status(&data_dir.join("state")),
@@ -547,21 +552,66 @@ async fn set_preferences(
     state: State<'_, DaemonState>,
     launch_at_login: Option<bool>,
     notify_when_ready: Option<bool>,
+    allow_project_commands: Option<bool>,
 ) -> Result<DesktopSnapshot, String> {
     let data_dir = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     let path = data_dir.join("preferences.json");
-    let mut prefs = read_preferences(&path);
+    let runtime_running = daemon_is_running_state(&state);
+    apply_preferences_transaction(
+        &path,
+        launch_at_login,
+        notify_when_ready,
+        allow_project_commands,
+        runtime_running,
+        || stop_child(&state),
+        || start_daemon_inner(&app, &state),
+    )?;
+    desktop_snapshot_for(&app, &state).await
+}
+
+fn apply_preferences_transaction<FStop, FStart>(
+    path: &Path,
+    launch_at_login: Option<bool>,
+    notify_when_ready: Option<bool>,
+    allow_project_commands: Option<bool>,
+    runtime_running: bool,
+    mut stop_runtime: FStop,
+    mut start_runtime: FStart,
+) -> Result<(), String>
+where
+    FStop: FnMut() -> Result<(), String>,
+    FStart: FnMut() -> Result<(), String>,
+{
+    let previous = read_preferences(path);
+    let mut prefs = previous.clone();
     if let Some(value) = launch_at_login {
         prefs.launch_at_login = value;
     }
     if let Some(value) = notify_when_ready {
         prefs.notify_when_ready = value;
     }
-    write_json_atomic(&path, &prefs, true)?;
-    desktop_snapshot_for(&app, &state).await
+    if let Some(value) = allow_project_commands {
+        prefs.allow_project_commands = value;
+    }
+    let command_policy_changed = prefs.allow_project_commands != previous.allow_project_commands;
+    write_json_atomic(path, &prefs, true)?;
+    if command_policy_changed && runtime_running {
+        if stop_runtime().is_err() {
+            write_json_atomic(path, &previous, true)
+                .map_err(|_| "[COMMAND_POLICY_ROLLBACK_FAILED]".to_string())?;
+            return Err("[COMMAND_POLICY_ROLLBACK]".into());
+        }
+        if start_runtime().is_err() {
+            write_json_atomic(path, &previous, true)
+                .map_err(|_| "[COMMAND_POLICY_ROLLBACK_FAILED]".to_string())?;
+            start_runtime().map_err(|_| "[COMMAND_POLICY_ROLLBACK_RUNTIME_FAILED]".to_string())?;
+            return Err("[COMMAND_POLICY_ROLLBACK]".into());
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -918,6 +968,7 @@ fn start_daemon_once(app: &AppHandle, state: &DaemonState) -> Result<(), String>
         std::env::var("PATH").unwrap_or_default()
     );
     let pilot_token = read_pilot_token(&config_dir).unwrap_or_default();
+    let allow_project_commands = project_commands_env_value(&data_dir.join("preferences.json"));
     let pilot_policy_url =
         read_pilot_policy_url(&config_dir).unwrap_or_else(|| LEGACY_PILOT_POLICY_URL.into());
     let pilot_public_key =
@@ -962,6 +1013,7 @@ fn start_daemon_once(app: &AppHandle, state: &DaemonState) -> Result<(), String>
         .env("DASHOU_PILOT_POLICY_URL", pilot_policy_url)
         .env("DASHOU_PILOT_POLICY_PUBLIC_KEY", pilot_public_key)
         .env("DASHOU_PILOT_POLICY_TOKEN", pilot_token)
+        .env("DASHOU_ALLOW_PROJECT_COMMANDS", allow_project_commands)
         .env("DASHOU_CLOUDFLARED_PATH", &resources.cloudflared)
         .env("DASHOU_EMBEDDED_RUNTIME", "1")
         .env("PATH", path)
@@ -1817,7 +1869,16 @@ fn read_preferences(path: &Path) -> StoredPreferences {
         .unwrap_or(StoredPreferences {
             launch_at_login: true,
             notify_when_ready: false,
+            allow_project_commands: false,
         })
+}
+
+fn project_commands_env_value(preferences_path: &Path) -> &'static str {
+    if read_preferences(preferences_path).allow_project_commands {
+        "1"
+    } else {
+        "0"
+    }
 }
 
 fn read_pilot_token(config_dir: &Path) -> Option<String> {
@@ -2470,17 +2531,22 @@ fn set_private_file(_path: &Path) -> Result<(), String> {
 }
 
 fn normalize_public_url(value: &str) -> Result<String, String> {
-    let value = value.trim().trim_end_matches('/');
-    if !(value.starts_with("https://")
-        || value.starts_with("http://localhost")
-        || value.starts_with("http://127.0.0.1"))
-    {
+    let parsed = reqwest::Url::parse(value.trim()).map_err(|_| "公网地址无效".to_string())?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("公网地址不能包含用户名或密码".into());
+    }
+    let loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    if parsed.scheme() != "https" && !(parsed.scheme() == "http" && loopback) {
         return Err("公网地址必须是 HTTPS（本机测试可使用 localhost）".into());
     }
-    if value.len() < 13 {
-        return Err("公网地址无效".into());
+    if parsed.host_str().is_none()
+        || !matches!(parsed.path(), "" | "/")
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err("公网地址必须是一个完整站点地址，不能包含路径、查询或片段".into());
     }
-    Ok(value.to_string())
+    Ok(parsed.as_str().trim_end_matches('/').to_string())
 }
 
 fn generate_token() -> String {
@@ -2537,7 +2603,6 @@ pub fn run() {
         )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .register_uri_scheme_protocol("dashou-ui", |context, request| {
@@ -2598,11 +2663,7 @@ pub fn run() {
                     }
                 });
             }
-            if !cfg!(debug_assertions) {
-                if let Ok(Some(version)) = ui_update::recover_interrupted_update(app.handle()) {
-                    let _ = ui_update::navigate_to_active(app.handle(), &version);
-                }
-            }
+            let _ = ui_update::disable_downloaded_content(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2612,6 +2673,7 @@ pub fn run() {
             update_allowed_roots,
             set_preferences,
             restart_runtime,
+            open_chatgpt,
             connection_code,
             mark_chatgpt_setup_opened,
             apply_for_access,
@@ -2658,9 +2720,40 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+#[tauri::command]
+fn open_chatgpt() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(CHATGPT_APPS_URL);
+        command
+    };
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("rundll32.exe");
+        command.arg("url.dll,FileProtocolHandler").arg(CHATGPT_APPS_URL);
+        hide_windows_console(&mut command);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(CHATGPT_APPS_URL);
+        command
+    };
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法打开 ChatGPT：{error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     fn make_resource_tree(root: &Path) {
         for (directory, file) in [
@@ -2694,6 +2787,22 @@ mod tests {
     }
 
     #[test]
+    fn public_url_validation_allows_only_exact_loopback_http_hosts() {
+        assert_eq!(
+            normalize_public_url("http://localhost:3999/").unwrap(),
+            "http://localhost:3999"
+        );
+        assert_eq!(
+            normalize_public_url("https://device.example/").unwrap(),
+            "https://device.example"
+        );
+        assert!(normalize_public_url("http://localhost.attacker.example").is_err());
+        assert!(normalize_public_url("http://127.0.0.1.attacker.example").is_err());
+        assert!(normalize_public_url("https://user:secret@device.example").is_err());
+        assert!(normalize_public_url("https://device.example/path").is_err());
+    }
+
+    #[test]
     fn missing_runtime_resource_is_rejected_before_spawn() {
         let root = test_root("runtime-resources-missing");
         make_resource_tree(&root);
@@ -2711,7 +2820,9 @@ mod tests {
     #[test]
     fn drive_relative_resource_path_is_rejected_before_canonicalization() {
         assert_eq!(
-            canonical_resource_path(PathBuf::from("E:")).err().as_deref(),
+            canonical_resource_path(PathBuf::from("E:"))
+                .err()
+                .as_deref(),
             Some("[MISSING_RESOURCES]")
         );
     }
@@ -2764,7 +2875,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.3-rc.13".into(),
+            version: "0.1.3-rc.14".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -2779,7 +2890,7 @@ mod tests {
     #[test]
     fn desktop_snapshot_does_not_serialize_secrets_or_file_contents() {
         let snapshot = DesktopSnapshot {
-            version: "0.1.3-rc.13".into(),
+            version: "0.1.3-rc.14".into(),
             device_nickname: "搭手·青柠-4827".into(),
             device_fingerprint: "7F3A-91C2".into(),
             platform: "macos-aarch64".into(),
@@ -2794,6 +2905,7 @@ mod tests {
             error: None,
             launch_at_login: true,
             notify_when_ready: false,
+            allow_project_commands: false,
             content_version: "built-in".into(),
             ui_source: "built-in".into(),
             chatgpt_connection: ChatgptConnectionStatus {
@@ -2865,12 +2977,22 @@ mod tests {
 
         let wobble_one = resolve_runtime_phase(true, "ready", true, true, false, 0, true);
         assert_eq!(wobble_one, ("ready".into(), 1, true));
-        let wobble_two = resolve_runtime_phase(true, "ready", true, true, false, wobble_one.1, wobble_one.2);
+        let wobble_two =
+            resolve_runtime_phase(true, "ready", true, true, false, wobble_one.1, wobble_one.2);
         assert_eq!(wobble_two, ("ready".into(), 2, true));
-        let recovered = resolve_runtime_phase(true, "ready", true, true, false, wobble_two.1, wobble_two.2);
+        let recovered =
+            resolve_runtime_phase(true, "ready", true, true, false, wobble_two.1, wobble_two.2);
         assert_eq!(recovered, ("recovering".into(), 3, true));
 
-        let healthy_again = resolve_runtime_phase(true, "recovering", true, true, true, recovered.1, recovered.2);
+        let healthy_again = resolve_runtime_phase(
+            true,
+            "recovering",
+            true,
+            true,
+            true,
+            recovered.1,
+            recovered.2,
+        );
         assert_eq!(healthy_again, ("ready".into(), 0, true));
     }
 
@@ -2882,7 +3004,8 @@ mod tests {
         let second = resolve_runtime_phase(true, "connecting", true, true, false, first.1, first.2);
         assert_eq!(second, ("connecting".into(), 2, false));
 
-        let third = resolve_runtime_phase(true, "connecting", true, true, false, second.1, second.2);
+        let third =
+            resolve_runtime_phase(true, "connecting", true, true, false, second.1, second.2);
         assert_eq!(third, ("recovering".into(), 3, false));
     }
 
@@ -2911,6 +3034,131 @@ mod tests {
             read_preferences(&root.join("preferences.json")).notify_when_ready,
             false
         );
+        assert_eq!(
+            read_preferences(&root.join("preferences.json")).allow_project_commands,
+            false
+        );
+    }
+
+    #[test]
+    fn project_command_preference_is_persisted_and_maps_to_runtime_environment() {
+        let root = test_root("project-command-preference");
+        fs::create_dir_all(&root).expect("create preferences test directory");
+        let path = root.join("preferences.json");
+        assert_eq!(project_commands_env_value(&path), "0");
+
+        apply_preferences_transaction(&path, None, None, Some(true), false, || Ok(()), || Ok(()))
+            .expect("enable project commands while runtime is stopped");
+
+        assert!(read_preferences(&path).allow_project_commands);
+        assert_eq!(project_commands_env_value(&path), "1");
+        fs::remove_dir_all(root).expect("remove preferences test directory");
+    }
+
+    #[test]
+    fn command_policy_change_restarts_once_and_unrelated_preferences_do_not_restart() {
+        let root = test_root("project-command-restart");
+        fs::create_dir_all(&root).expect("create preferences test directory");
+        let path = root.join("preferences.json");
+        let stops = Cell::new(0);
+        let starts = Cell::new(0);
+
+        apply_preferences_transaction(
+            &path,
+            None,
+            None,
+            Some(true),
+            true,
+            || {
+                stops.set(stops.get() + 1);
+                Ok(())
+            },
+            || {
+                starts.set(starts.get() + 1);
+                Ok(())
+            },
+        )
+        .expect("restart after command policy change");
+        assert_eq!(stops.get(), 1);
+        assert_eq!(starts.get(), 1);
+
+        apply_preferences_transaction(
+            &path,
+            None,
+            Some(true),
+            None,
+            true,
+            || {
+                stops.set(stops.get() + 1);
+                Ok(())
+            },
+            || {
+                starts.set(starts.get() + 1);
+                Ok(())
+            },
+        )
+        .expect("save notification preference without restart");
+        assert_eq!(stops.get(), 1);
+        assert_eq!(starts.get(), 1);
+        assert!(read_preferences(&path).notify_when_ready);
+        fs::remove_dir_all(root).expect("remove preferences test directory");
+    }
+
+    #[test]
+    fn failed_command_policy_restart_restores_previous_preference_and_runtime() {
+        let root = test_root("project-command-rollback");
+        fs::create_dir_all(&root).expect("create preferences test directory");
+        let path = root.join("preferences.json");
+        let starts = Cell::new(0);
+
+        let result = apply_preferences_transaction(
+            &path,
+            None,
+            None,
+            Some(true),
+            true,
+            || Ok(()),
+            || {
+                starts.set(starts.get() + 1);
+                if starts.get() == 1 {
+                    Err("new policy failed".into())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(result.err().as_deref(), Some("[COMMAND_POLICY_ROLLBACK]"));
+        assert_eq!(starts.get(), 2);
+        assert!(!read_preferences(&path).allow_project_commands);
+        assert_eq!(project_commands_env_value(&path), "0");
+        fs::remove_dir_all(root).expect("remove preferences test directory");
+    }
+
+    #[test]
+    fn failed_runtime_stop_does_not_leave_command_policy_changed() {
+        let root = test_root("project-command-stop-rollback");
+        fs::create_dir_all(&root).expect("create preferences test directory");
+        let path = root.join("preferences.json");
+        let starts = Cell::new(0);
+
+        let result = apply_preferences_transaction(
+            &path,
+            None,
+            None,
+            Some(true),
+            true,
+            || Err("stop failed".into()),
+            || {
+                starts.set(starts.get() + 1);
+                Ok(())
+            },
+        );
+
+        assert_eq!(result.err().as_deref(), Some("[COMMAND_POLICY_ROLLBACK]"));
+        assert_eq!(starts.get(), 0);
+        assert!(!read_preferences(&path).allow_project_commands);
+        fs::remove_dir_all(root).expect("remove preferences test directory");
     }
 
     #[test]
@@ -2923,7 +3171,7 @@ mod tests {
                 unix_seconds: 1_786_838_400,
                 stage: "application_submit_failed".into(),
                 outcome: "error".into(),
-                app_version: "0.1.3-rc.13".into(),
+                app_version: "0.1.3-rc.14".into(),
                 error_code: Some("CONTROL_CONNECT".into()),
                 application_id: None,
                 device_nickname: Some("搭手·青柠-4827".into()),

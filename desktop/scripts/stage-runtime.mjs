@@ -69,13 +69,12 @@ try {
     await chmod(join(cloudDir, cloudflaredName), 0o755);
   }
   await cp(join(repoRoot, "dist"), join(runtimeDir, "dist"), { recursive: true });
-  await writeFile(join(runtimeDir, "package.json"), JSON.stringify({
-    name: packageJson.name,
-    version: packageJson.version,
-    type: packageJson.type,
-    dependencies: packageJson.dependencies,
-  }, null, 2) + "\n");
-  const npmArgs = ["install", "--prefix", runtimeDir, "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"];
+  // The desktop runtime must be the exact dependency graph reviewed in the
+  // repository. A fresh `npm install` here would resolve caret ranges again
+  // and could silently put different code inside an otherwise signed app.
+  await copyFile(join(repoRoot, "package.json"), join(runtimeDir, "package.json"));
+  await copyFile(join(repoRoot, "package-lock.json"), join(runtimeDir, "package-lock.json"));
+  const npmArgs = ["ci", "--prefix", runtimeDir, "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"];
   execFileSync(
     npmExecPath ? process.execPath : (windows ? "npm.exe" : "npm"),
     npmExecPath ? [npmExecPath, ...npmArgs] : npmArgs,

@@ -39,6 +39,13 @@ export function SettingsView({ copy, snapshot, access, version, preferences, bus
           disabled={busy === "notifications"}
           onChange={(value) => onPreference("notifyWhenReady", value)}
         />
+        <SettingToggle
+          label={copy.projectCommands}
+          hint={copy.projectCommandsHint}
+          checked={preferences.allowProjectCommands}
+          disabled={busy === "preferences"}
+          onChange={(value) => onPreference("allowProjectCommands", value)}
+        />
       </section>
       <TroubleshootingCard snapshot={snapshot} access={access} copy={copy} onCopy={onCopyDiagnostics} />
       <section class="settings-card compact-card">

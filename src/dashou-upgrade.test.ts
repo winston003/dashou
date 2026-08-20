@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { compareVersions, downloadAndVerifyPackage, isTrustedPackageUrl, updateCheck, updatePlatform } from "./dashou-upgrade.js";
+import { compareVersions, downloadAndVerifyPackage, installCliUpdate, isTrustedPackageUrl, updateCheck, updatePlatform } from "./dashou-upgrade.js";
 
 test("GitHub update check compares release versions and selects the platform", () => {
   assert.equal(compareVersions("0.2.0", "0.1.0"), 1);
@@ -52,5 +52,18 @@ test("CLI update packages require a trusted HTTPS URL and matching SHA-256", asy
       fetchImpl,
     ),
     /SHA-256 does not match/,
+  );
+});
+
+test("CLI self-install stays disabled until manifests have an independent signature", async () => {
+  await assert.rejects(
+    () => installCliUpdate({
+      currentVersion: "0.1.3-rc.14",
+      latestVersion: "0.1.3-rc.14",
+      updateAvailable: true,
+      manifestUrl: "https://example.invalid/cli-latest.json",
+      platform: "darwin-aarch64",
+    }),
+    /自动安装已暂停/,
   );
 });

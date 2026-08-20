@@ -28,7 +28,7 @@ export const initialState: AppState = {
   helpOpen: false,
   toast: null,
   error: null,
-  preferences: { launchAtLogin: true, notifyWhenReady: false },
+  preferences: { launchAtLogin: true, notifyWhenReady: false, allowProjectCommands: false },
   availableUpdate: null,
 };
 
@@ -112,6 +112,7 @@ export function reducer(state: AppState, action: Action): AppState {
           preferences: {
             launchAtLogin: action.snapshot.launchAtLogin,
             notifyWhenReady: action.snapshot.notifyWhenReady,
+            allowProjectCommands: action.snapshot.allowProjectCommands,
           },
           loading: false,
         };

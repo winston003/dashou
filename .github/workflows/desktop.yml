@@ -1,5 +1,4 @@
 name: Dashou desktop
-
 permissions:
   contents: read
 
@@ -22,11 +21,11 @@ jobs:
   verify-source:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.22.3
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
       - name: Install Tauri Linux prerequisites
         run: |
           sudo apt-get update
@@ -52,11 +51,11 @@ jobs:
     env:
       DASHOU_MACOS_SIGNING_MODE: ${{ inputs.macos_signing_mode || vars.DASHOU_MACOS_SIGNING_MODE || 'adhoc' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.22.3
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
       - run: npm ci
       - run: npm ci --prefix desktop
       - name: Select macOS signing mode
@@ -148,7 +147,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           test -n "$dmg"
           echo "Ad-hoc macOS pilot artifact ready: $dmg"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dashou-macos-arm64
           path: desktop/src-tauri/target/release/bundle/**
@@ -159,11 +158,11 @@ jobs:
     env:
       DASHOU_MACOS_SIGNING_MODE: ${{ inputs.macos_signing_mode || vars.DASHOU_MACOS_SIGNING_MODE || 'adhoc' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.22.3
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
       - run: npm ci
       - run: npm ci --prefix desktop
       - name: Select macOS signing mode
@@ -255,7 +254,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           test -n "$dmg"
           echo "Ad-hoc macOS pilot artifact ready: $dmg"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dashou-macos-x64
           path: desktop/src-tauri/target/release/bundle/**
@@ -264,11 +263,11 @@ jobs:
     needs: verify-source
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.22.3
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
       - run: npm ci
       - run: npm ci --prefix desktop
       - name: Prepare Tauri resource directories
@@ -293,7 +292,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.DASHOU_UPDATER_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri:build --prefix desktop -- --bundles nsis
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dashou-windows
           path: desktop/src-tauri/target/release/bundle/**
@@ -308,19 +307,19 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.22.3
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dashou-macos-arm64
           path: downloaded/macos-arm64
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dashou-macos-x64
           path: downloaded/macos-x64
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dashou-windows
           path: downloaded/windows
@@ -371,7 +370,7 @@ jobs:
           actual="$(curl --fail --silent --show-error https://dashou-pilot-control.whilewon.workers.dev/healthz | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).version||""))')"
           test "$actual" = "$expected"
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           repository: winston003/dashou-releases
           tag_name: desktop-${{ steps.release.outputs.version }}
@@ -388,7 +387,7 @@ jobs:
 
             1. 安装并打开搭手，点击“开始使用搭手”。
             2. 搭手准备好后，点击“添加文件夹”，选择一个或多个工作文件夹，再点击“开始使用”。
-            3. 点击“连接 ChatGPT”，跟着客户端里的 1/3 → 2/3 → 3/3 完成创建和授权；名称、描述、服务器 URL 和授权密码都能直接复制。
+            3. 点击“连接 ChatGPT”，跟着客户端里的 1/3 → 2/3 → 3/3 操作；需要填写的内容和授权密码都能直接复制。
             4. 客户端显示“ChatGPT 已连接”后，点击“复制任务并打开 ChatGPT”，完成第一个只读项目检查。
 
             [打开 ChatGPT 插件页](https://chatgpt.com/plugins?view=personal)
@@ -407,11 +406,11 @@ jobs:
 
             ## 最近变化
 
-            - 新增客户端内 1/3 → 2/3 → 3/3 ChatGPT 连接引导，不必来回翻找说明。
-            - 创建搭手需要的名称、描述、服务器 URL 和授权密码都可以直接复制。
-            - 分开显示“电脑端准备好”“授权完成”“ChatGPT 已连接”和“首次任务成功”。
-            - 授权页会直接提示从搭手客户端复制密码。
-            - 新增第一个只读任务入口，用真实项目列表确认连接已经可以工作。
+            - 项目命令默认关闭；需要运行测试或构建时，由你在设置中主动开启。
+            - 项目命令不会继承搭手、GitHub、云服务或代理凭据。
+            - 更新前先显示本次变化，你可以稍后再说，不会强制中断工作。
+            - 界面只使用安装包内置版本，避免未经安装包签名的代码进入客户端。
+            - 创建搭手需要的内容和授权密码都可以直接复制，不必在多个页面来回找。
             - 排查信息会标明连接停在哪一步，但不包含密码、目录路径、文件内容或 ChatGPT 对话。
 
             完整图文说明：[GETTING_STARTED.md](https://github.com/winston003/dashou/blob/${{ github.ref_name }}/docs/GETTING_STARTED.md)

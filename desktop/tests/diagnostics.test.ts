@@ -5,7 +5,7 @@ import { applicationStatusLabel, chatgptConnectionLabel, platformLabel, troubles
 import type { DesktopSnapshot } from "../src/types";
 
 const snapshot = (overrides: Partial<DesktopSnapshot> = {}): DesktopSnapshot => ({
-  version: "0.1.3-rc.13",
+  version: "0.1.3-rc.14",
   deviceNickname: "搭手·青柠-4827",
   deviceFingerprint: "7F3A-91C2",
   platform: "windows-x86_64",
@@ -18,6 +18,7 @@ const snapshot = (overrides: Partial<DesktopSnapshot> = {}): DesktopSnapshot => 
   recoveryAttempts: 0,
   launchAtLogin: true,
   notifyWhenReady: false,
+  allowProjectCommands: false,
   contentVersion: "built-in",
   uiSource: "built-in",
   ...overrides,

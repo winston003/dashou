@@ -5,12 +5,10 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "dialog:default",
-    "clipboard-manager:allow-read-text",
+    "dialog:allow-open",
     "clipboard-manager:allow-write-text",
     "process:default",
     "autostart:default",
-    "shell:allow-open",
     "updater:default",
     "notification:default"
   ]

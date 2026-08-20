@@ -76,7 +76,10 @@ async function fixture(t: TestContext): Promise<Fixture> {
   await writeFile(join(project, "AGENTS.md"), "Use the project test command before reporting success.\n");
   await writeFile(join(project, "src", "CLAUDE.md"), "Keep source files focused.\n");
 
-  const server = createDashouMcpServer(new DashouWorkspaceRegistry([project]));
+  const server = createDashouMcpServer(new DashouWorkspaceRegistry(
+    [project],
+    { allowProjectCommands: true },
+  ));
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "dashou-test", version: "0.1.0" });
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);

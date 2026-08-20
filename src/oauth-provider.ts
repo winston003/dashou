@@ -126,6 +126,14 @@ function requestedScopesAllowed(requested: string[], supported: string[]): boole
   return requested.every((scope) => supported.includes(scope));
 }
 
+function setAuthorizationPageHeaders(res: Response): void {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cache-Control", "no-store");
+}
+
 export class SingleUserOAuthProvider implements OAuthServerProvider {
   readonly clientsStore: OAuthRegisteredClientsStore;
   private readonly codes = new Map<string, AuthorizationCodeRecord>();
@@ -163,7 +171,8 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
 
     if (res.req.method !== "POST") {
       markConnectionMilestone(this.stateDir, "authorization-requested");
-      res.status(200).setHeader("Content-Type", "text/html; charset=utf-8");
+      res.status(200);
+      setAuthorizationPageHeaders(res);
       res.send(
         formHtml({
           clientName: client.client_name ?? client.client_id,
@@ -177,7 +186,8 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
 
     const providedToken = String(res.req.body?.owner_token ?? "");
     if (!safeEquals(providedToken, this.config.ownerToken)) {
-      res.status(401).setHeader("Content-Type", "text/html; charset=utf-8");
+      res.status(401);
+      setAuthorizationPageHeaders(res);
       res.send(
         formHtml({
           error: "连接密码不正确。",

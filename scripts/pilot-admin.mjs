@@ -132,8 +132,8 @@ function printApplications(applications, status) {
   }
   for (const application of applications) {
     console.log("");
-    console.log(`${application.applicationId}  ${application.deviceName}`);
-    console.log(`  ${application.platform} · 申请于 ${formatDate(application.createdAt)}${application.contact ? ` · ${application.contact}` : ""}`);
+    console.log(`${terminalText(application.applicationId)}  ${terminalText(application.deviceName)}`);
+    console.log(`  ${terminalText(application.platform)} · 申请于 ${formatDate(application.createdAt)}${application.contact ? ` · ${terminalText(application.contact)}` : ""}`);
     if (application.period) console.log(`  授权：${periodLabel(application.period)} · 到期 ${formatDate(application.expiresAt)}`);
     if (application.reason) console.log(`  原因：${application.reason}`);
   }
@@ -144,8 +144,8 @@ function printApplications(applications, status) {
 }
 
 function printApplicationTimeline(application, events) {
-  console.log(`申请 ${application.applicationId}`);
-  console.log(`${application.deviceName} · ${application.platform} · 当前：${statusLabel(application.status)}`);
+  console.log(`申请 ${terminalText(application.applicationId)}`);
+  console.log(`${terminalText(application.deviceName)} · ${terminalText(application.platform)} · 当前：${statusLabel(application.status)}`);
   const timeline = [
     [application.createdAt, "控制面收到申请"],
     [application.provisioningStartedAt, "管理员开始准备连接"],
@@ -168,6 +168,14 @@ function printApplicationTimeline(application, events) {
       console.log(`  ${formatDate(at)}  ${eventLabel(event.stage)}${event.outcome === "error" ? `（失败${event.errorCode ? `：${event.errorCode}` : ""}）` : ""} · v${event.appVersion}`);
     }
   }
+}
+
+function terminalText(value) {
+  return String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, (character) => {
+      const codePoint = character.codePointAt(0).toString(16).padStart(4, "0");
+      return `\\u${codePoint}`;
+    });
 }
 
 function eventLabel(stage) {

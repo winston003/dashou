@@ -37,6 +37,8 @@ const EMPTY_STATE: OAuthState = {
   accessTokens: {},
   refreshTokens: {},
 };
+const MAX_REGISTERED_CLIENTS = 64;
+const MAX_CLIENT_METADATA_BYTES = 16 * 1024;
 
 function redirectHostAllowed(redirectUri: string, allowedHosts: string[]): boolean {
   let parsed: URL;
@@ -68,6 +70,12 @@ export class JsonOAuthStore {
     client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at">,
     allowedRedirectHosts: string[],
   ): OAuthClientInformationFull {
+    if (Object.keys(this.state.clients).length >= MAX_REGISTERED_CLIENTS) {
+      throw new InvalidRequestError("This Dashou server has reached its registered client limit");
+    }
+    if (Buffer.byteLength(JSON.stringify(client), "utf8") > MAX_CLIENT_METADATA_BYTES) {
+      throw new InvalidRequestError("Client metadata is too large");
+    }
     if (!client.redirect_uris.every((uri) => redirectHostAllowed(String(uri), allowedRedirectHosts))) {
       throw new InvalidRequestError("Client redirect_uri is not allowed for this Dashou server");
     }

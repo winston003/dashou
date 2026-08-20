@@ -387,7 +387,7 @@ function printHelp(): void {
     "  dashou config get      查看配置",
     "  dashou config set publicBaseUrl <url>",
     "  dashou upgrade --check 检查 GitHub 客户端更新",
-    "  dashou upgrade --apply 下载并校验后升级 CLI",
+    "  dashou upgrade --apply 暂不可用；请从 GitHub Release 或 npm 指定版本升级",
     "  dashou pilot invite --interactive 生成一份内测邀请文件",
     "  dashou admin applications list  查看待审核申请",
     "  dashou pilot-control 启动内测账号控制面",
