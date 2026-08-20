@@ -523,9 +523,10 @@ async fn update_allowed_roots(
     let config_path = data_dir.join("config").join("config.json");
     let previous =
         read_stored_config(&config_path).ok_or_else(|| "[NOT_CONFIGURED]".to_string())?;
-    let was_running = daemon_is_running_state(&state);
+    let was_running =
+        daemon_is_running_state(&state) || external_daemon_is_running(&data_dir.join("state"));
     if was_running {
-        stop_child(&state)?;
+        take_over_daemon_inner(&app, &state)?;
     }
     let next = StoredConfig {
         allowed_roots,
@@ -559,14 +560,15 @@ async fn set_preferences(
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     let path = data_dir.join("preferences.json");
-    let runtime_running = daemon_is_running_state(&state);
+    let runtime_running =
+        daemon_is_running_state(&state) || external_daemon_is_running(&data_dir.join("state"));
     apply_preferences_transaction(
         &path,
         launch_at_login,
         notify_when_ready,
         allow_project_commands,
         runtime_running,
-        || stop_child(&state),
+        || take_over_daemon_inner(&app, &state),
         || start_daemon_inner(&app, &state),
     )?;
     desktop_snapshot_for(&app, &state).await
@@ -619,9 +621,14 @@ async fn restart_runtime(
     app: AppHandle,
     state: State<'_, DaemonState>,
 ) -> Result<DesktopSnapshot, String> {
-    stop_child(&state)?;
+    take_over_daemon_inner(&app, &state)?;
     start_daemon_inner(&app, &state)?;
     desktop_snapshot_for(&app, &state).await
+}
+
+#[tauri::command]
+fn prepare_for_update(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), String> {
+    take_over_daemon_inner(&app, &state)
 }
 
 #[tauri::command]
@@ -1242,25 +1249,47 @@ fn stop_daemon(state: State<'_, DaemonState>) -> Result<(), String> {
 /// app-data directory. An unknown process is never stopped automatically.
 #[tauri::command]
 fn take_over_daemon(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), String> {
-    stop_child(&state)?;
+    take_over_daemon_inner(&app, &state)
+}
+
+fn take_over_daemon_inner(app: &AppHandle, state: &DaemonState) -> Result<(), String> {
     let data_dir = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     let state_dir = data_dir.join("state");
-    let Some(pid) = (match live_lock_owner(&state_dir) {
-        Some(LiveLockOwner::Dashou(pid)) => Some(pid),
+    take_over_daemon_with(
+        || stop_child_inner(state),
+        || live_lock_owner(&state_dir),
+        terminate_external_daemon,
+        process_is_alive,
+    )
+}
+
+fn take_over_daemon_with<FStop, FOwner, FTerminate, FAlive>(
+    mut stop_owned: FStop,
+    mut lock_owner: FOwner,
+    mut terminate_external: FTerminate,
+    mut is_alive: FAlive,
+) -> Result<(), String>
+where
+    FStop: FnMut() -> Result<(), String>,
+    FOwner: FnMut() -> Option<LiveLockOwner>,
+    FTerminate: FnMut(u32) -> Result<(), String>,
+    FAlive: FnMut(u32) -> bool,
+{
+    stop_owned()?;
+    let pid = match lock_owner() {
+        Some(LiveLockOwner::Dashou(pid)) => pid,
         Some(LiveLockOwner::Other | LiveLockOwner::Unknown) => {
             return Err("[OTHER_PROCESS]".into());
         }
-        None => None,
-    }) else {
-        return Ok(());
+        None => return Ok(()),
     };
 
-    terminate_external_daemon(pid)?;
-    if process_is_alive(pid) {
-        return Err("搭手没有完全退出，请稍后再试".into());
+    terminate_external(pid).map_err(|_| "[RUNTIME_TAKEOVER_FAILED]".to_string())?;
+    if is_alive(pid) {
+        return Err("[RUNTIME_TAKEOVER_FAILED]".into());
     }
     Ok(())
 }
@@ -1344,7 +1373,7 @@ fn terminate_child_process(child: &mut Child) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LiveLockOwner {
     Dashou(u32),
     Other,
@@ -2659,7 +2688,30 @@ pub fn run() {
                 let handle = app.handle().clone();
                 thread::spawn(move || {
                     if let Some(state) = handle.try_state::<DaemonState>() {
-                        let _ = start_daemon_inner(&handle, &state);
+                        // The previous desktop process can disappear during an
+                        // updater relaunch while its Node runtime keeps using
+                        // the old bundle in memory. A lock under this exact
+                        // app-data directory plus a verified Dashou serve
+                        // command is sufficient proof to replace it. Unknown
+                        // processes remain protected by take_over_daemon_inner.
+                        if let Err(error) = take_over_daemon_inner(&handle, &state) {
+                            let code = if error == "[OTHER_PROCESS]" {
+                                "OTHER_PROCESS"
+                            } else {
+                                "RUNTIME_TAKEOVER_FAILED"
+                            };
+                            if let Ok(mut guard) = state.0.lock() {
+                                guard.meta.phase = "blocked".into();
+                                guard.meta.error = Some(UiError {
+                                    code: code.into(),
+                                    retryable: true,
+                                    diagnostic_id: Some(format!("runtime-{}", unix_seconds())),
+                                });
+                                guard.meta.desired_running = false;
+                            }
+                        } else {
+                            let _ = start_daemon_inner(&handle, &state);
+                        }
                     }
                 });
             }
@@ -2673,6 +2725,7 @@ pub fn run() {
             update_allowed_roots,
             set_preferences,
             restart_runtime,
+            prepare_for_update,
             open_chatgpt,
             connection_code,
             mark_chatgpt_setup_opened,
@@ -2875,7 +2928,7 @@ mod tests {
         let status = DesktopStatus {
             configured: true,
             running: true,
-            version: "0.1.3-rc.14".into(),
+            version: "0.1.3-rc.15".into(),
             mcp_url: Some("https://pilot.warmbyte.studio/mcp".into()),
             local_health: true,
             public_health: true,
@@ -2890,7 +2943,7 @@ mod tests {
     #[test]
     fn desktop_snapshot_does_not_serialize_secrets_or_file_contents() {
         let snapshot = DesktopSnapshot {
-            version: "0.1.3-rc.14".into(),
+            version: "0.1.3-rc.15".into(),
             device_nickname: "搭手·青柠-4827".into(),
             device_fingerprint: "7F3A-91C2".into(),
             platform: "macos-aarch64".into(),
@@ -3014,6 +3067,7 @@ mod tests {
         for error in [
             "[OTHER_PROCESS]",
             "[RUNTIME_START_FAILED]",
+            "[RUNTIME_TAKEOVER_FAILED]",
             "[MISSING_RESOURCES]",
             "[NOT_CONFIGURED]",
         ] {
@@ -3171,7 +3225,7 @@ mod tests {
                 unix_seconds: 1_786_838_400,
                 stage: "application_submit_failed".into(),
                 outcome: "error".into(),
-                app_version: "0.1.3-rc.14".into(),
+                app_version: "0.1.3-rc.15".into(),
                 error_code: Some("CONTROL_CONNECT".into()),
                 application_id: None,
                 device_nickname: Some("搭手·青柠-4827".into()),
@@ -3349,6 +3403,80 @@ mod tests {
         assert!(!is_dashou_serve_command(
             "/usr/bin/python /tmp/dashou-cli.js serve"
         ));
+    }
+
+    #[test]
+    fn runtime_takeover_stops_owned_child_before_replacing_stale_dashou() {
+        let actions = std::cell::RefCell::new(Vec::new());
+        let result = take_over_daemon_with(
+            || {
+                actions.borrow_mut().push("stop-owned");
+                Ok(())
+            },
+            || Some(LiveLockOwner::Dashou(4242)),
+            |pid| {
+                assert_eq!(pid, 4242);
+                actions.borrow_mut().push("stop-stale");
+                Ok(())
+            },
+            |pid| {
+                assert_eq!(pid, 4242);
+                actions.borrow_mut().push("verify-stopped");
+                false
+            },
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(
+            actions.into_inner(),
+            vec!["stop-owned", "stop-stale", "verify-stopped"]
+        );
+    }
+
+    #[test]
+    fn runtime_takeover_never_stops_unknown_or_other_processes() {
+        for owner in [LiveLockOwner::Other, LiveLockOwner::Unknown] {
+            let terminated = Cell::new(false);
+            let result = take_over_daemon_with(
+                || Ok(()),
+                || Some(owner),
+                |_| {
+                    terminated.set(true);
+                    Ok(())
+                },
+                |_| true,
+            );
+
+            assert_eq!(result.err().as_deref(), Some("[OTHER_PROCESS]"));
+            assert!(!terminated.get());
+        }
+    }
+
+    #[test]
+    fn runtime_takeover_reports_structured_failure_and_stops_before_inspection() {
+        let owner_checked = Cell::new(false);
+        let failed_stop = take_over_daemon_with(
+            || Err("owned child would not stop".into()),
+            || {
+                owner_checked.set(true);
+                None
+            },
+            |_| Ok(()),
+            |_| false,
+        );
+        assert_eq!(failed_stop.err().as_deref(), Some("owned child would not stop"));
+        assert!(!owner_checked.get());
+
+        let stale_still_alive = take_over_daemon_with(
+            || Ok(()),
+            || Some(LiveLockOwner::Dashou(4242)),
+            |_| Ok(()),
+            |_| true,
+        );
+        assert_eq!(
+            stale_still_alive.err().as_deref(),
+            Some("[RUNTIME_TAKEOVER_FAILED]")
+        );
     }
 
     #[test]

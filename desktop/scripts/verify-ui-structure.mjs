@@ -18,6 +18,7 @@ const source = await Promise.all([
   readFile(join(root, "src", "components", "ChatGPTConnectGuide.tsx"), "utf8"),
 ]);
 const stylesheet = await readFile(join(root, "src", "styles.css"), "utf8");
+const rustSource = await readFile(join(root, "src-tauri", "src", "lib.rs"), "utf8");
 const catalog = JSON.parse(await readFile(join(root, "copy", "default.json"), "utf8"));
 const tauri = JSON.parse(await readFile(join(root, "src-tauri", "tauri.conf.json"), "utf8"));
 const allSource = source.join("\n");
@@ -36,6 +37,18 @@ assert(allSource.includes("update_allowed_roots"), "UI must use transactional ro
 assert(allSource.includes("set_preferences"), "UI must persist preferences through the Bridge");
 assert(allSource.includes("ErrorBoundary"), "UI must have a crash fallback");
 assert(allSource.includes("installUpdate"), "desktop updates must be confirmed separately from update checks");
+const bridgeSource = source[1];
+assert(
+  bridgeSource.indexOf("update.download()") < bridgeSource.indexOf('invoke("prepare_for_update")')
+    && bridgeSource.indexOf('invoke("prepare_for_update")') < bridgeSource.indexOf("update.install()"),
+  "desktop updates must finish downloading before stopping the runtime and installing",
+);
+assert(
+  bridgeSource.indexOf('invoke("restart_runtime")') > bridgeSource.indexOf("update.install()"),
+  "failed desktop updates must attempt to restore the current runtime",
+);
+assert(rustSource.includes("take_over_daemon_inner(&handle, &state)"), "startup must replace a verified stale Dashou runtime after an update");
+assert(rustSource.includes("prepare_for_update,"), "the native update preparation command must be exposed");
 assert(allSource.includes("mark_chatgpt_setup_opened"), "the connection guide must persist its progress through the Bridge");
 assert(allSource.includes("first_task_completed"), "the UI must distinguish a working ChatGPT task from local runtime readiness");
 assert(!source[6].includes("copy.currentVersion"), "the troubleshooting card must not repeat the app version");

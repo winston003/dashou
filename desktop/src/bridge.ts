@@ -117,8 +117,7 @@ export const tauriBridge: Bridge = {
   },
   installUpdate: async () => {
     if (!pendingUpdate) throw new Error("UPDATE_NOT_READY");
-    await pendingUpdate.downloadAndInstall();
-    await relaunch();
+    await installDownloadedUpdate(pendingUpdate, (command) => invokeCommand(command), relaunch);
   },
   enableNotifications: async () => {
     let granted = await isPermissionGranted();
@@ -127,6 +126,22 @@ export const tauriBridge: Bridge = {
   },
   notifyReady: async (title, body) => { await sendNotification({ title, body }); },
 };
+
+export async function installDownloadedUpdate(
+  update: Pick<Update, "download" | "install">,
+  invoke: (command: "prepare_for_update" | "restart_runtime") => Promise<unknown>,
+  relaunchApp: () => Promise<void>,
+): Promise<void> {
+  await update.download();
+  try {
+    await invoke("prepare_for_update");
+    await update.install();
+    await relaunchApp();
+  } catch (error) {
+    await invoke("restart_runtime").catch(() => undefined);
+    throw error;
+  }
+}
 
 export async function setAutostart(enabled: boolean): Promise<void> {
   if (enabled) await enable();

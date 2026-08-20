@@ -190,6 +190,7 @@ export type CopyCatalog = {
   errorControlConnect: string;
   errorControlResponse: string;
   errorRuntimeStart: string;
+  errorRuntimeTakeover: string;
   errorRuntimeHealthTimeout: string;
   errorNotConfigured: string;
   errorMissingResources: string;

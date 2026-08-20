@@ -128,6 +128,7 @@ export const defaultCopy: CopyCatalog = {
   errorControlConnect: "暂时联系不上搭手服务，请稍后再试。",
   errorControlResponse: "搭手服务暂时没有返回完整结果，请稍后再试。",
   errorRuntimeStart: "搭手这次没有启动成功。你可以重新准备；如果仍然不行，把排查信息发给我们。",
+  errorRuntimeTakeover: "更新后的旧连接还没有完全退出。请点击“重新准备”；如果仍然不行，把排查信息发给我们。",
   errorRuntimeHealthTimeout: "搭手已经启动，但本机服务一直没有准备好。请点击“重新准备”；如果仍然不行，把排查信息发给我们。",
   errorNotConfigured: "搭手还没有准备好，请先完成第一次设置。",
   errorMissingResources: "安装内容不完整，请重新安装最新版本。",

@@ -58,8 +58,8 @@ test("CLI update packages require a trusted HTTPS URL and matching SHA-256", asy
 test("CLI self-install stays disabled until manifests have an independent signature", async () => {
   await assert.rejects(
     () => installCliUpdate({
-      currentVersion: "0.1.3-rc.14",
-      latestVersion: "0.1.3-rc.14",
+      currentVersion: "0.1.3-rc.15",
+      latestVersion: "0.1.3-rc.15",
       updateAvailable: true,
       manifestUrl: "https://example.invalid/cli-latest.json",
       platform: "darwin-aarch64",
