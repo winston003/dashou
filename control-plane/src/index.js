@@ -96,9 +96,37 @@ async function routeRequest(request, env) {
   if (rejectMatch && request.method === "POST") {
     return adminRejectApplication(request, env, decodeURIComponent(rejectMatch[1]));
   }
+  const reopenMatch = /^\/admin\/applications\/([^/]+)\/reopen$/.exec(url.pathname);
+  if (reopenMatch && request.method === "POST") {
+    return adminReopenApplication(request, env, decodeURIComponent(reopenMatch[1]));
+  }
+  const periodMatch = /^\/admin\/applications\/([^/]+)\/period$/.exec(url.pathname);
+  if (periodMatch && request.method === "POST") {
+    return adminChangeApplicationPeriod(request, env, decodeURIComponent(periodMatch[1]));
+  }
+  const extendMatch = /^\/admin\/applications\/([^/]+)\/extend$/.exec(url.pathname);
+  if (extendMatch && request.method === "POST") {
+    return adminExtendApplication(request, env, decodeURIComponent(extendMatch[1]));
+  }
+  const noteMatch = /^\/admin\/applications\/([^/]+)\/notes$/.exec(url.pathname);
+  if (noteMatch && request.method === "POST") {
+    return adminAddApplicationNote(request, env, decodeURIComponent(noteMatch[1]));
+  }
   const revokeMatch = /^\/admin\/applications\/([^/]+)\/revoke$/.exec(url.pathname);
   if (revokeMatch && request.method === "POST") {
     return adminRevokeApplication(request, env, decodeURIComponent(revokeMatch[1]));
+  }
+  const restoreMatch = /^\/admin\/applications\/([^/]+)\/restore$/.exec(url.pathname);
+  if (restoreMatch && request.method === "POST") {
+    return adminRestoreApplication(request, env, decodeURIComponent(restoreMatch[1]));
+  }
+  const authorizationMatch = /^\/admin\/applications\/([^/]+)\/authorization$/.exec(url.pathname);
+  if (authorizationMatch && request.method === "POST") {
+    return adminEditAuthorization(request, env, decodeURIComponent(authorizationMatch[1]));
+  }
+  const profileMatch = /^\/admin\/applications\/([^/]+)\/profile$/.exec(url.pathname);
+  if (profileMatch && request.method === "POST") {
+    return adminEditApplicationProfile(request, env, decodeURIComponent(profileMatch[1]));
   }
 
   if (url.pathname === "/admin/pilot/accounts" && request.method === "GET") return adminList(request, env);
@@ -250,6 +278,9 @@ async function adminApplicationDetail(request, env, applicationId) {
   const eventResult = await env.DB.prepare(
     "SELECT event_id, stage, outcome, error_code, app_version, client_unix_seconds, received_at, device_nickname, device_fingerprint FROM pilot_client_events WHERE application_id = ?1 ORDER BY received_at, client_unix_seconds",
   ).bind(applicationId).all();
+  const auditResult = await env.DB.prepare(
+    "SELECT audit_id, actor, action, from_status, to_status, from_period, to_period, reason, note, request_id, created_at FROM pilot_admin_audit_events WHERE application_id = ?1 ORDER BY created_at, audit_id",
+  ).bind(applicationId).all();
   return json({
     application: adminApplicationSummary(row),
     events: (eventResult.results ?? []).map((event) => ({
@@ -262,6 +293,19 @@ async function adminApplicationDetail(request, env, applicationId) {
       receivedAt: event.received_at,
       ...(event.device_nickname ? { deviceNickname: event.device_nickname } : {}),
       ...(event.device_fingerprint ? { deviceFingerprint: event.device_fingerprint } : {}),
+    })),
+    auditEvents: (auditResult.results ?? []).map((event) => ({
+      auditId: event.audit_id,
+      actor: event.actor,
+      action: event.action,
+      ...(event.from_status ? { fromStatus: event.from_status } : {}),
+      ...(event.to_status ? { toStatus: event.to_status } : {}),
+      ...(event.from_period ? { fromPeriod: event.from_period } : {}),
+      ...(event.to_period ? { toPeriod: event.to_period } : {}),
+      ...(event.reason ? { reason: event.reason } : {}),
+      ...(event.note ? { note: event.note } : {}),
+      requestId: event.request_id,
+      createdAt: event.created_at,
     })),
   });
 }
@@ -287,6 +331,7 @@ async function adminReset(request, env) {
   if (typeof env.DB.batch !== "function") throw new Error("D1 batch support is required");
   await env.DB.batch([
     env.DB.prepare("DELETE FROM pilot_client_events"),
+    env.DB.prepare("DELETE FROM pilot_admin_audit_events"),
     env.DB.prepare("DELETE FROM pilot_application_rate_limits"),
     env.DB.prepare("DELETE FROM pilot_applications"),
     env.DB.prepare("DELETE FROM pilot_accounts"),
@@ -348,6 +393,11 @@ async function adminApproveApplication(request, env, applicationId) {
         "UPDATE pilot_applications SET status = 'approved', period = ?1, account_id = ?2, tunnel_id = ?3, hostname = ?4, activation_ciphertext = ?5, approved_at = ?6, expires_at = ?7, updated_at = ?6 WHERE application_id = ?8 AND status = 'provisioning'",
       ).bind(period, accountId, requiredString(provisioned.tunnelId, "provisioned tunnelId"), requiredString(provisioned.hostname, "provisioned hostname"), activationCiphertext, approvedAtText, expiresAt, applicationId),
     ];
+    statements.push(auditStatement(env, applicationId, "approved", auditContext(env, approvedAtText), {
+      fromStatus: current.status === "provisioning" ? "pending" : current.status,
+      toStatus: "approved",
+      toPeriod: period,
+    }));
     if (typeof env.DB.batch !== "function") throw new Error("D1 batch support is required");
     await env.DB.batch(statements);
     return json({ applicationId, status: "approved", period, approvedAt: approvedAtText, expiresAt, mcpUrl: new URL("/mcp", publicBaseUrl).toString() });
@@ -366,16 +416,126 @@ async function adminRejectApplication(request, env, applicationId) {
   const body = await jsonObject(request);
   const reason = optionalLimitedString(body.reason, "reason", 300);
   const now = new Date().toISOString();
-  const result = await env.DB.prepare(
-    "UPDATE pilot_applications SET status = 'rejected', rejected_at = ?1, rejection_reason = ?2, updated_at = ?1 WHERE application_id = ?3 AND status = 'pending'",
-  ).bind(now, reason ?? null, applicationId).run();
-  if (!changed(result)) throw new HttpError(409, "Only a pending application can be rejected");
+  const current = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
+  if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
+  if (current.status !== "pending") throw new HttpError(409, `Only a pending application can be rejected: ${current.status}`);
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE pilot_applications SET status = 'rejected', rejected_at = ?1, rejection_reason = ?2, updated_at = ?1 WHERE application_id = ?3 AND status = 'pending'",
+    ).bind(now, reason ?? null, applicationId),
+    auditStatement(env, applicationId, "rejected", auditContext(env, now), {
+      fromStatus: "pending",
+      toStatus: "rejected",
+      reason: reason ?? null,
+    }),
+  ]);
   return json({ applicationId, status: "rejected", rejectedAt: now, ...(reason ? { reason } : {}) });
+}
+
+async function adminReopenApplication(request, env, applicationId) {
+  requireAdmin(request, env);
+  validateApplicationId(applicationId);
+  const body = await jsonObject(request);
+  const reason = limitedString(body.reason, "reason", 300);
+  const current = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
+  if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
+  if (current.status !== "rejected") throw new HttpError(409, `Only a rejected application can be reopened: ${current.status}`);
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE pilot_applications SET status = 'pending', rejected_at = NULL, rejection_reason = NULL, updated_at = ?1 WHERE application_id = ?2 AND status = 'rejected'",
+    ).bind(now, applicationId),
+    auditStatement(env, applicationId, "reopened", auditContext(env, now), {
+      fromStatus: "rejected",
+      toStatus: "pending",
+      reason,
+    }),
+  ]);
+  return json({ applicationId, status: "pending", reopenedAt: now });
+}
+
+async function adminChangeApplicationPeriod(request, env, applicationId) {
+  requireAdmin(request, env);
+  validateApplicationId(applicationId);
+  const body = await jsonObject(request);
+  const period = requiredString(body.period, "period");
+  if (!PERIODS.has(period)) throw new HttpError(400, "period must be week, month, quarter or year");
+  const reason = limitedString(body.reason, "reason", 300);
+  const current = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
+  if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
+  if (current.status !== "approved") throw new HttpError(409, `Only an approved, not-yet-activated application can change period: ${current.status}`);
+  if (current.period === period) throw new HttpError(409, "The authorization period is unchanged");
+  if (!current.account_id || !current.activation_ciphertext || !current.approved_at) {
+    throw new HttpError(409, "Application does not have a replaceable activation payload");
+  }
+  const activation = await decryptActivation(current.activation_ciphertext, env.DASHOU_ACTIVATION_KEY);
+  const expiresAt = addAuthorizationPeriod(new Date(current.approved_at), period).toISOString();
+  const activationCiphertext = await encryptActivation({ ...activation, expiresAt }, env.DASHOU_ACTIVATION_KEY);
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE pilot_accounts SET expires_at = ?1 WHERE account_id = ?2").bind(expiresAt, current.account_id),
+    env.DB.prepare(
+      "UPDATE pilot_applications SET period = ?1, expires_at = ?2, activation_ciphertext = ?3, updated_at = ?4 WHERE application_id = ?5 AND status = 'approved'",
+    ).bind(period, expiresAt, activationCiphertext, now, applicationId),
+    auditStatement(env, applicationId, "period_changed", auditContext(env, now), {
+      fromStatus: "approved",
+      toStatus: "approved",
+      fromPeriod: current.period,
+      toPeriod: period,
+      reason,
+    }),
+  ]);
+  return json({ applicationId, status: "approved", period, expiresAt, changedAt: now });
+}
+
+async function adminExtendApplication(request, env, applicationId) {
+  requireAdmin(request, env);
+  validateApplicationId(applicationId);
+  const body = await jsonObject(request);
+  const period = requiredString(body.period, "period");
+  if (!PERIODS.has(period)) throw new HttpError(400, "period must be week, month, quarter or year");
+  const reason = limitedString(body.reason, "reason", 300);
+  const current = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
+  if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
+  if (current.status !== "activated") throw new HttpError(409, `Only an activated application can be extended: ${current.status}`);
+  if (!current.account_id) throw new HttpError(409, "Activated application has no account");
+  const currentExpiry = Date.parse(current.expires_at);
+  const base = Number.isFinite(currentExpiry) ? new Date(Math.max(Date.now(), currentExpiry)) : new Date();
+  const expiresAt = addAuthorizationPeriod(base, period).toISOString();
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE pilot_accounts SET enabled = 1, expires_at = ?1, revoked_at = NULL WHERE account_id = ?2").bind(expiresAt, current.account_id),
+    env.DB.prepare("UPDATE pilot_applications SET expires_at = ?1, updated_at = ?2 WHERE application_id = ?3 AND status = 'activated'").bind(expiresAt, now, applicationId),
+    auditStatement(env, applicationId, "authorization_extended", auditContext(env, now), {
+      fromStatus: "activated",
+      toStatus: "activated",
+      fromPeriod: current.period,
+      toPeriod: period,
+      reason,
+    }),
+  ]);
+  return json({ applicationId, status: "activated", extensionPeriod: period, expiresAt, extendedAt: now });
+}
+
+async function adminAddApplicationNote(request, env, applicationId) {
+  requireAdmin(request, env);
+  validateApplicationId(applicationId);
+  const body = await jsonObject(request);
+  const note = limitedString(body.note, "note", 1_000);
+  const current = await env.DB.prepare("SELECT application_id FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
+  if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    "INSERT INTO pilot_admin_audit_events (audit_id, application_id, actor, action, note, request_id, created_at) VALUES (?1, ?2, ?3, 'note_added', ?4, ?5, ?6)",
+  ).bind(`audit_${randomToken().slice(0, 24)}`, applicationId, env.PILOT_ADMIN_ACTOR?.trim() || "admin", note, `req_${randomToken().slice(0, 24)}`, now).run();
+  return json({ applicationId, noteAddedAt: now });
 }
 
 async function adminRevokeApplication(request, env, applicationId) {
   requireAdmin(request, env);
   validateApplicationId(applicationId);
+  const body = await jsonObject(request);
+  const reason = optionalLimitedString(body.reason, "reason", 300);
   const current = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
   if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
   if (!current.account_id || !["approved", "activated", "expired"].includes(current.status)) {
@@ -384,9 +544,106 @@ async function adminRevokeApplication(request, env, applicationId) {
   const now = new Date().toISOString();
   await env.DB.batch([
     env.DB.prepare("UPDATE pilot_accounts SET enabled = 0, revoked_at = COALESCE(revoked_at, ?1) WHERE account_id = ?2").bind(now, current.account_id),
-    env.DB.prepare("UPDATE pilot_applications SET status = 'revoked', revoked_at = ?1, activation_ciphertext = NULL, updated_at = ?1 WHERE application_id = ?2").bind(now, applicationId),
+    env.DB.prepare("UPDATE pilot_applications SET status = 'revoked', revoked_at = ?1, revoked_from_status = ?2, updated_at = ?1 WHERE application_id = ?3").bind(now, current.status, applicationId),
+    auditStatement(env, applicationId, "revoked", auditContext(env, now), {
+      fromStatus: current.status,
+      toStatus: "revoked",
+      reason: reason ?? null,
+    }),
   ]);
-  return json({ applicationId, status: "revoked", revokedAt: now });
+  return json({ applicationId, status: "revoked", revokedAt: now, ...(reason ? { reason } : {}) });
+}
+
+async function adminRestoreApplication(request, env, applicationId) {
+  requireAdmin(request, env);
+  validateApplicationId(applicationId);
+  const body = await jsonObject(request);
+  const reason = limitedString(body.reason, "reason", 300);
+  const current = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
+  if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
+  if (current.status !== "revoked") throw new HttpError(409, `Only a revoked application can be restored: ${current.status}`);
+  const restoredStatus = current.revoked_from_status || (current.activated_at ? "activated" : "approved");
+  if (!["approved", "activated", "expired"].includes(restoredStatus)) {
+    throw new HttpError(409, `Revoked application has no restorable status: ${restoredStatus}`);
+  }
+  if (restoredStatus === "approved" && !current.activation_ciphertext) {
+    throw new HttpError(409, "The previous pending authorization payload is no longer available; submit a new application");
+  }
+  if (!current.account_id) throw new HttpError(409, "Revoked application has no pilot account");
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE pilot_accounts SET enabled = 1, revoked_at = NULL WHERE account_id = ?1").bind(current.account_id),
+    env.DB.prepare("UPDATE pilot_applications SET status = ?1, revoked_at = NULL, revoked_from_status = NULL, updated_at = ?2 WHERE application_id = ?3 AND status = 'revoked'").bind(restoredStatus, now, applicationId),
+    auditStatement(env, applicationId, "restored", auditContext(env, now), {
+      fromStatus: "revoked",
+      toStatus: restoredStatus,
+      reason,
+    }),
+  ]);
+  return json({ applicationId, status: restoredStatus, restoredAt: now });
+}
+
+async function adminEditAuthorization(request, env, applicationId) {
+  requireAdmin(request, env);
+  validateApplicationId(applicationId);
+  const body = await jsonObject(request);
+  const expiresAt = requiredString(body.expiresAt, "expiresAt");
+  validateExpiry(expiresAt);
+  const reason = limitedString(body.reason, "reason", 300);
+  const current = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
+  if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
+  if (!["approved", "activated", "expired", "revoked"].includes(current.status)) {
+    throw new HttpError(409, `Application cannot edit authorization from status: ${current.status}`);
+  }
+  if (current.expires_at === expiresAt) throw new HttpError(409, "The authorization date is unchanged");
+  let activationCiphertext = current.activation_ciphertext;
+  if (current.status === "approved") {
+    if (!current.activation_ciphertext) throw new HttpError(409, "Application does not have a replaceable activation payload");
+    const activation = await decryptActivation(current.activation_ciphertext, env.DASHOU_ACTIVATION_KEY);
+    activationCiphertext = await encryptActivation({ ...activation, expiresAt }, env.DASHOU_ACTIVATION_KEY);
+  }
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    ...(current.account_id ? [env.DB.prepare("UPDATE pilot_accounts SET expires_at = ?1 WHERE account_id = ?2").bind(expiresAt, current.account_id)] : []),
+    env.DB.prepare("UPDATE pilot_applications SET period = NULL, expires_at = ?1, activation_ciphertext = ?2, updated_at = ?3 WHERE application_id = ?4").bind(expiresAt, activationCiphertext, now, applicationId),
+    auditStatement(env, applicationId, "authorization_changed", auditContext(env, now), {
+      fromStatus: current.status,
+      toStatus: current.status,
+      reason,
+      note: `expiresAt: ${current.expires_at || "—"} → ${expiresAt}`,
+    }),
+  ]);
+  return json({ applicationId, status: current.status, expiresAt, changedAt: now });
+}
+
+async function adminEditApplicationProfile(request, env, applicationId) {
+  requireAdmin(request, env);
+  validateApplicationId(applicationId);
+  const body = await jsonObject(request);
+  const hasNickname = Object.prototype.hasOwnProperty.call(body, "nickname");
+  const hasProfileNote = Object.prototype.hasOwnProperty.call(body, "profileNote");
+  if (!hasNickname && !hasProfileNote) throw new HttpError(400, "nickname or profileNote is required");
+  const current = await env.DB.prepare("SELECT * FROM pilot_applications WHERE application_id = ?1").bind(applicationId).first();
+  if (!current) throw new HttpError(404, `Application not found: ${applicationId}`);
+  const nickname = hasNickname ? (optionalLimitedString(body.nickname, "nickname", 100) ?? null) : (current.nickname ?? null);
+  const profileNote = hasProfileNote ? (optionalLimitedString(body.profileNote, "profileNote", 1_000) ?? null) : (current.profile_note ?? null);
+  if (nickname === (current.nickname ?? null) && profileNote === (current.profile_note ?? null)) {
+    throw new HttpError(409, "The application profile is unchanged");
+  }
+  const now = new Date().toISOString();
+  const changes = [
+    hasNickname ? `昵称：${current.nickname || "未设置"} → ${nickname || "未设置"}` : null,
+    hasProfileNote ? "基本信息备注已更新" : null,
+  ].filter(Boolean).join("；");
+  await env.DB.batch([
+    env.DB.prepare("UPDATE pilot_applications SET nickname = ?1, profile_note = ?2, updated_at = ?3 WHERE application_id = ?4").bind(nickname, profileNote, now, applicationId),
+    auditStatement(env, applicationId, "profile_updated", auditContext(env, now), {
+      fromStatus: current.status,
+      toStatus: current.status,
+      note: changes,
+    }),
+  ]);
+  return json({ applicationId, nickname, profileNote, updatedAt: now });
 }
 
 async function authorizedApplication(request, env, applicationId) {
@@ -433,6 +690,8 @@ function adminApplicationSummary(row) {
     deviceName: row.device_name,
     ...(row.device_nickname ? { deviceNickname: row.device_nickname } : {}),
     ...(row.device_fingerprint ? { deviceFingerprint: row.device_fingerprint } : {}),
+    ...(row.nickname ? { nickname: row.nickname } : {}),
+    ...(row.profile_note ? { profileNote: row.profile_note } : {}),
     platform: row.platform,
     ...(row.contact ? { contact: row.contact } : {}),
     ...(row.account_id ? { accountId: row.account_id } : {}),
@@ -518,6 +777,33 @@ function requireAdmin(request, env) {
   if (!adminAuthorized(request, env)) throw new HttpError(401, "Invalid pilot admin token");
 }
 
+function auditContext(env, createdAt = new Date().toISOString()) {
+  return {
+    actor: env.PILOT_ADMIN_ACTOR?.trim() || "admin",
+    requestId: `req_${randomToken().slice(0, 24)}`,
+    createdAt,
+  };
+}
+
+function auditStatement(env, applicationId, action, context, fields = {}) {
+  return env.DB.prepare(
+    "INSERT INTO pilot_admin_audit_events (audit_id, application_id, actor, action, from_status, to_status, from_period, to_period, reason, note, request_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+  ).bind(
+    `audit_${randomToken().slice(0, 24)}`,
+    applicationId,
+    context.actor,
+    action,
+    fields.fromStatus ?? null,
+    fields.toStatus ?? null,
+    fields.fromPeriod ?? null,
+    fields.toPeriod ?? null,
+    fields.reason ?? null,
+    fields.note ?? null,
+    context.requestId,
+    context.createdAt,
+  );
+}
+
 function adminAuthorized(request, env) {
   const presented = bearerToken(request);
   return Boolean(presented && env.PILOT_ADMIN_TOKEN && constantTimeEqual(presented, env.PILOT_ADMIN_TOKEN));
@@ -536,6 +822,7 @@ function accountSummary(row) {
     expiresAt: row.expires_at,
     createdAt: row.created_at,
     ...(row.revoked_at ? { revokedAt: row.revoked_at } : {}),
+    ...(row.revoked_from_status ? { revokedFromStatus: row.revoked_from_status } : {}),
   };
 }
 

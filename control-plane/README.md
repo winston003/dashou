@@ -89,10 +89,20 @@ dashou admin applications revoke req_xxx
 管理员接口：
 
 - `GET /admin/applications?status=pending`
+- `GET /admin/applications/:id`（包含客户端事件和管理员审计事件）
 - `POST /admin/applications/:id/approve`
 - `POST /admin/applications/:id/reject`
-- `POST /admin/applications/:id/revoke`
+- `POST /admin/applications/:id/reopen`（`rejected → pending`，必须填写纠正原因）
+- `POST /admin/applications/:id/period`（只允许未领取配置的 `approved` 申请调整期限）
+- `POST /admin/applications/:id/extend`（只允许 `activated` 申请追加授权期限）
+- `POST /admin/applications/:id/authorization`（直接编辑授权到期时间，保留原值和操作原因）
+- `POST /admin/applications/:id/notes`（追加管理员内部备注）
+- `POST /admin/applications/:id/profile`（编辑管理员侧昵称和基本信息备注）
+- `POST /admin/applications/:id/revoke`（可逆停用，保留原授权凭证和历史）
+- `POST /admin/applications/:id/restore`（恢复到撤销前状态，必须填写原因）
 
-兼容账号接口仍保留在 `/admin/pilot/accounts`。所有管理员接口只接受 `PILOT_ADMIN_TOKEN` Bearer 凭据。日志不得记录管理员 token、申请凭据、Pilot token、Tunnel Token 或激活密文。
+兼容账号接口仍保留在 `/admin/pilot/accounts`。所有管理员接口只接受 `PILOT_ADMIN_TOKEN` Bearer 凭据。日志不得记录管理员 token、申请凭据、Pilot token、Tunnel Token 或激活密文。昵称/基本信息备注是管理员侧资料，不会作为申请人的审批备注发送给客户端。
+
+审核状态不是任意可编辑字段。拒绝纠正必须先重新进入 `pending`，再走批准流程；测试账号的撤销是可逆停用，可恢复到撤销前状态；授权到期时间可以直接编辑，不再限制为只能延期。所有管理员动作、基本信息修改和内部备注都会追加到 `pilot_admin_audit_events`。
 
 部署上线不等于用户验收。上线后仍要分别验证 D1 migration、Worker `/healthz`、真实 Tunnel/DNS、外部 HTTPS、桌面领取、ChatGPT OAuth 和第一个真实本地任务。
