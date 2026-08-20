@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Server as HttpServer } from "node:http";
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -16,12 +17,21 @@ import { DashouWorkspaceRegistry } from "./dashou-workspace.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import { McpSessionRegistry } from "./mcp-sessions.js";
 import { markConnectionMilestone } from "./connection-milestones.js";
+import {
+  flushPendingPilotTelemetry,
+  queueFirstMcpConnection,
+  queueFirstToolCallAttempt,
+  queueFirstToolCallFailure,
+  queueFirstToolCallSuccess,
+} from "./dashou-pilot-telemetry.js";
 
 const MCP_SESSION_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
 const MCP_SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1_000;
 const VERSION = dashouVersion();
 
 type Transport = StreamableHTTPServerTransport;
+type ToolCallObserver = (outcome: "ok" | "error", errorCode?: string) => Promise<void> | void;
+type ToolCallTelemetryContext = { outcomeObserved: boolean };
 
 export { DASHOU_V0_TOOLS };
 
@@ -31,7 +41,12 @@ export interface RunningDashouServer {
   ready(): Promise<void>;
   close(): Promise<void>;
 }
-export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToolSuccess: () => void = () => undefined): McpServer {
+export function createDashouMcpServer(
+  workspaceRegistry: DashouWorkspaceRegistry,
+  observer?: ToolCallObserver,
+  onToolSuccess: () => void = () => undefined,
+): McpServer {
+  const workspaces = observedWorkspaceRegistry(workspaceRegistry, observer);
   const server = new McpServer(
     {
       name: "dashou",
@@ -282,6 +297,17 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
   });
   const workspaces = new DashouWorkspaceRegistry(config.allowedRoots);
   const transports = new McpSessionRegistry<Transport>();
+  const toolCallContext = new AsyncLocalStorage<ToolCallTelemetryContext>();
+  const observeToolCall: ToolCallObserver = async (outcome, errorCode) => {
+    const context = toolCallContext.getStore();
+    if (context) context.outcomeObserved = true;
+    if (outcome === "ok") {
+      await queueFirstToolCallSuccess(config, { appVersion: VERSION });
+    } else {
+      await queueFirstToolCallFailure(config, errorCode ?? "TOOL_FAILED", { appVersion: VERSION });
+    }
+  };
+  void flushPendingPilotTelemetry(config, { appVersion: VERSION });
 
   app.use(
     mcpAuthRouter({
@@ -327,12 +353,15 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
 
     const sessionId = req.header("mcp-session-id");
     const initializeRequest = req.method === "POST" && isInitializeRequest(req.body);
+    const toolCallRequest = req.method === "POST" && req.body?.method === "tools/call";
+    if (toolCallRequest) await queueFirstToolCallAttempt(config, { appVersion: VERSION });
 
     try {
       let transport: Transport | undefined;
       if (sessionId) {
         transport = transports.get(sessionId);
         if (!transport) {
+          if (toolCallRequest) await queueFirstToolCallFailure(config, "MCP_SESSION_INVALID", { appVersion: VERSION });
           sendJsonRpcError(res, 404, -32000, "Unknown MCP session");
           return;
         }
@@ -348,15 +377,30 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
           const closedSessionId = transport?.sessionId;
           if (closedSessionId) transports.remove(closedSessionId);
         };
-        const mcpServer = createDashouMcpServer(workspaces, () => markConnectionMilestone(config.stateDir, "first-tool-success"));
+        const mcpServer = createDashouMcpServer(
+          workspaces,
+          observeToolCall,
+          () => markConnectionMilestone(config.stateDir, "first-tool-success"),
+        );
         await mcpServer.connect(transport);
       } else {
+        if (toolCallRequest) await queueFirstToolCallFailure(config, "MCP_SESSION_INVALID", { appVersion: VERSION });
         sendJsonRpcError(res, 400, -32000, "No valid MCP session");
         return;
       }
 
-      await transport.handleRequest(req, res, req.body);
+      if (toolCallRequest) {
+        const context = { outcomeObserved: false };
+        await toolCallContext.run(context, () => transport.handleRequest(req, res, req.body));
+        if (!context.outcomeObserved) {
+          await queueFirstToolCallFailure(config, "MCP_TOOL_REJECTED", { appVersion: VERSION });
+        }
+      } else {
+        await transport.handleRequest(req, res, req.body);
+      }
+      if (initializeRequest) await queueFirstMcpConnection(config, { appVersion: VERSION });
     } catch (error) {
+      if (toolCallRequest) await queueFirstToolCallFailure(config, "MCP_REQUEST_FAILED", { appVersion: VERSION });
       if (!res.headersSent) {
         sendJsonRpcError(res, 500, -32603, error instanceof Error ? error.message : "Internal server error");
       }
@@ -395,6 +439,47 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
       return closePromise;
     },
   };
+}
+
+function observedWorkspaceRegistry(registry: DashouWorkspaceRegistry, observer?: ToolCallObserver): DashouWorkspaceRegistry {
+  if (!observer) return registry;
+  const toolMethods = new Set(["listProjects", "openProject", "readText", "writeText", "editText", "execute"]);
+  return new Proxy(registry, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (typeof value !== "function") return value;
+      const bound = value.bind(target) as (...args: unknown[]) => unknown;
+      if (typeof property !== "string" || !toolMethods.has(property)) return bound;
+      return async (...args: unknown[]) => {
+        try {
+          const result = await bound(...args);
+          await notifyToolObserver(observer, "ok");
+          return result;
+        } catch (error) {
+          await notifyToolObserver(observer, "error", classifyToolFailure(error));
+          throw error;
+        }
+      };
+    },
+  });
+}
+
+async function notifyToolObserver(observer: ToolCallObserver, outcome: "ok" | "error", errorCode?: string): Promise<void> {
+  try {
+    await observer(outcome, errorCode);
+  } catch {
+    // Telemetry must never change the result of a user-requested tool call.
+  }
+}
+
+function classifyToolFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/timed out|timeout|ETIMEDOUT/i.test(message)) return "TOOL_TIMEOUT";
+  if (/not opened|unknown workspace|workspaceId/i.test(message)) return "PROJECT_NOT_OPEN";
+  if (/outside|not allowed|not authorized|permission|EACCES|EPERM/i.test(message)) return "ACCESS_DENIED";
+  if (/not found|ENOENT/i.test(message)) return "NOT_FOUND";
+  if (/oldText|unique|multiple matches|replacement/i.test(message)) return "EDIT_CONFLICT";
+  return "TOOL_FAILED";
 }
 
 function createDashouExpressApp(host: string, allowedHosts?: string[]) {

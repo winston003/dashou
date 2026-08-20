@@ -302,6 +302,7 @@ struct DiagnosticRuntime {
 
 const DIAGNOSTIC_STAGES: &[&str] = &[
     "app_opened",
+    "first_seen",
     "application_submit_started",
     "application_submitted",
     "application_submit_failed",
@@ -328,6 +329,10 @@ const DIAGNOSTIC_STAGES: &[&str] = &[
     "first_tool_success",
     "connection_ready",
     "diagnostics_copied",
+    "first_mcp_connection",
+    "first_tool_call_attempt",
+    "first_tool_call_success",
+    "first_tool_call_failure",
 ];
 
 #[tauri::command]
@@ -349,11 +354,28 @@ fn record_client_event(
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     let identity = load_or_create_device_identity(&data_dir)?;
+    let event_seconds = unix_seconds();
+    if stage == "app_opened" && claim_first_seen(&data_dir, event_seconds)? {
+        append_diagnostic_event(
+            &data_dir,
+            DiagnosticEvent {
+                event_id: format!("evt_{}", generate_token()),
+                unix_seconds: event_seconds,
+                stage: "first_seen".into(),
+                outcome: "ok".into(),
+                app_version: env!("CARGO_PKG_VERSION").into(),
+                error_code: None,
+                application_id: application_id.clone(),
+                device_nickname: Some(identity.device_nickname.clone()),
+                device_fingerprint: Some(identity.device_fingerprint.clone()),
+            },
+        )?;
+    }
     append_diagnostic_event(
         &data_dir,
         DiagnosticEvent {
             event_id: format!("evt_{}", generate_token()),
-            unix_seconds: unix_seconds(),
+            unix_seconds: event_seconds,
             stage,
             outcome,
             app_version: env!("CARGO_PKG_VERSION").into(),
@@ -2074,6 +2096,20 @@ fn append_diagnostic_event(data_dir: &Path, event: DiagnosticEvent) -> Result<()
     file.write_all(b"\n").map_err(|error| error.to_string())
 }
 
+fn claim_first_seen(data_dir: &Path, unix_seconds: u64) -> Result<bool, String> {
+    let marker = data_dir.join("first-seen.json");
+    if marker.exists() {
+        return Ok(false);
+    }
+    fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
+    write_json_atomic(
+        &marker,
+        &serde_json::json!({ "unixSeconds": unix_seconds }),
+        true,
+    )?;
+    Ok(true)
+}
+
 #[cfg(test)]
 fn build_diagnostic_report(data_dir: &Path) -> DiagnosticReport {
     let config_path = data_dir.join("config").join("config.json");
@@ -2937,6 +2973,18 @@ mod tests {
         assert!(!json.contains("password"));
         assert!(!json.contains("/"));
         fs::remove_dir_all(root).expect("remove device identity test directory");
+    }
+
+    #[test]
+    fn first_seen_marker_is_written_once_without_sensitive_data() {
+        let root = test_root("first-seen");
+        assert!(claim_first_seen(&root, 1_786_838_400).expect("claim first observation"));
+        assert!(!claim_first_seen(&root, 1_786_838_401).expect("claim duplicate observation"));
+        let text = fs::read_to_string(root.join("first-seen.json"))
+            .expect("read first observation marker");
+        assert!(text.contains("1786838400"));
+        assert!(!text.contains("token"));
+        fs::remove_dir_all(root).expect("remove first observation test directory");
     }
 
     #[test]

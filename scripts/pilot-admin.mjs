@@ -28,7 +28,12 @@ if (scope === "applications") {
   } else if (action === "approve") {
     const applicationId = requiredArgument(subject, "applicationId");
     const period = option("--period") || "month";
-    const payload = await call("POST", `/admin/applications/${encodeURIComponent(applicationId)}/approve`, { period });
+    const subjectId = requiredArgument(option("--subject"), "--subject");
+    const preflight = await call("GET", `/admin/applications/${encodeURIComponent(applicationId)}`);
+    if (preflight.resourcePolicy?.enforced !== true || preflight.resourcePolicy?.version !== 1) {
+      throw new Error("线上控制面尚未启用资源所有权保护，已拒绝批准；请先部署最新 D1 migration 和 Worker");
+    }
+    const payload = await call("POST", `/admin/applications/${encodeURIComponent(applicationId)}/approve`, { period, subjectId });
     console.log(`已批准 ${payload.applicationId}，授权周期：${periodLabel(payload.period)}，到期：${formatDate(payload.expiresAt)}`);
     console.log(`设备连接：${payload.mcpUrl}`);
   } else if (action === "reject") {
@@ -40,6 +45,17 @@ if (scope === "applications") {
     const applicationId = requiredArgument(subject, "applicationId");
     const payload = await call("POST", `/admin/applications/${encodeURIComponent(applicationId)}/revoke`, {});
     console.log(`已撤销 ${payload.applicationId}`);
+  } else if (action === "retire") {
+    const applicationId = requiredArgument(subject, "applicationId");
+    const reason = requiredArgument(option("--reason"), "--reason");
+    const payload = await call("POST", `/admin/applications/${encodeURIComponent(applicationId)}/retire`, { reason });
+    console.log(`已释放 ${payload.applicationId} 的 Cloudflare 连接资源`);
+  } else if (action === "subject") {
+    const applicationId = requiredArgument(subject, "applicationId");
+    const subjectId = requiredArgument(option("--subject"), "--subject");
+    const reason = requiredArgument(option("--reason"), "--reason");
+    const payload = await call("POST", `/admin/applications/${encodeURIComponent(applicationId)}/subject`, { subjectId, reason });
+    console.log(`已将 ${payload.applicationId} 关联到客户 ${payload.subjectId}`);
   } else {
     throw new Error(`未知申请操作：${action}`);
   }
@@ -139,7 +155,7 @@ function printApplications(applications, status) {
   }
   if (status === "pending") {
     console.log("");
-    console.log("批准示例：dashou admin applications approve <申请编号> --period month");
+    console.log("批准示例：dashou admin applications approve <申请编号> --period month --subject customer-alice");
   }
 }
 
@@ -181,6 +197,8 @@ function terminalText(value) {
 function eventLabel(stage) {
   return ({
     app_opened: "打开客户端",
+    first_seen: "首次被分析版本观测到",
+    first_launch: "首次启动（旧版事件）",
     application_submit_started: "点击申请",
     application_submitted: "申请发送成功",
     application_submit_failed: "申请发送失败",
@@ -192,6 +210,11 @@ function eventLabel(stage) {
     runtime_start_failed: "本地服务启动失败",
     chatgpt_opened: "前往 ChatGPT",
     connection_password_copied: "复制授权密码",
+    first_mcp_connection: "首次 MCP 连接",
+    first_tool_call_attempt: "首次工具调用尝试",
+    first_tool_call_success: "首次工具调用成功",
+    first_tool_call_failure: "首次工具调用失败",
+    first_mcp_use: "首次 MCP 工具调用（旧版事件）",
   })[stage] || stage;
 }
 
@@ -244,9 +267,11 @@ function printHelp() {
     "申请审核：",
     "  dashou admin applications list",
     "  dashou admin applications inspect <申请编号>",
-    "  dashou admin applications approve <申请编号> --period week|month|quarter|year",
+    "  dashou admin applications approve <申请编号> --period week|month|quarter|year --subject <稳定客户标识>",
     "  dashou admin applications reject <申请编号> [--reason 原因]",
     "  dashou admin applications revoke <申请编号>",
+    "  dashou admin applications retire <申请编号> --reason <释放原因>",
+    "  dashou admin applications subject <申请编号> --subject <稳定客户标识> --reason <调整原因>",
     "  dashou admin reset --confirm DELETE_ALL_DASHOU_PILOT_DATA",
     "",
     "默认只列出待审核申请；使用 --status activated 查看已开通，或 --status all 查看全部。",

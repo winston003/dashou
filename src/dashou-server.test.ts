@@ -64,11 +64,31 @@ test("MCP flow discovers a project, loads its instructions, and edits it", async
   assert.match(text(execute), /ok/);
 });
 
+test("tool observer separates successful calls from categorized failures", async (t) => {
+  const outcomes: Array<{ outcome: "ok" | "error"; errorCode?: string }> = [];
+  const context = await fixture(t, (outcome, errorCode) => {
+    outcomes.push({ outcome, ...(errorCode ? { errorCode } : {}) });
+  });
+  await context.client.callTool({ name: "list_projects", arguments: {} });
+  const failed = await context.client.callTool({
+    name: "read",
+    arguments: { workspaceId: "missing", path: "README.md" },
+  });
+  assert.equal(failed.isError, true);
+  assert.deepEqual(outcomes, [
+    { outcome: "ok" },
+    { outcome: "error", errorCode: "PROJECT_NOT_OPEN" },
+  ]);
+});
+
 interface Fixture {
   client: Client;
   project: string;
 }
-async function fixture(t: TestContext): Promise<Fixture> {
+async function fixture(
+  t: TestContext,
+  observer?: (outcome: "ok" | "error", errorCode?: string) => Promise<void> | void,
+): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), "dashou-mcp-"));
   const project = join(root, "project");
   await mkdir(join(project, "src"), { recursive: true });
@@ -79,7 +99,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
   const server = createDashouMcpServer(new DashouWorkspaceRegistry(
     [project],
     { allowProjectCommands: true },
-  ));
+  ), observer);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "dashou-test", version: "0.1.0" });
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
