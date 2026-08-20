@@ -89,6 +89,7 @@ dashou admin applications revoke req_xxx
 管理员接口：
 
 - `GET /admin/applications?status=pending`
+- `GET /admin/analytics`（安装近似→首次真实使用漏斗、阶段耗时、错误排行和超时卡点）
 - `GET /admin/applications/:id`（包含客户端事件和管理员审计事件）
 - `POST /admin/applications/:id/approve`
 - `POST /admin/applications/:id/reject`
@@ -104,5 +105,7 @@ dashou admin applications revoke req_xxx
 兼容账号接口仍保留在 `/admin/pilot/accounts`。所有管理员接口只接受 `PILOT_ADMIN_TOKEN` Bearer 凭据。日志不得记录管理员 token、申请凭据、Pilot token、Tunnel Token 或激活密文。昵称/基本信息备注是管理员侧资料，不会作为申请人的审批备注发送给客户端。
 
 审核状态不是任意可编辑字段。拒绝纠正必须先重新进入 `pending`，再走批准流程；测试账号的撤销是可逆停用，可恢复到撤销前状态；授权到期时间可以直接编辑，不再限制为只能延期。所有管理员动作、基本信息修改和内部备注都会追加到 `pilot_admin_audit_events`。
+
+诊断分析使用 `first_launch` 作为安装近似时间，使用第一次真实 MCP `tools/call` 的 `first_mcp_use` 作为首次使用时间。两者都只记录状态、时间、版本和错误类别，不记录文件路径、文件内容、密码、Token 或对话内容。客户端事件在获得申请凭据后批量同步；未提交申请的安装不会出现在管理员统计中。
 
 部署上线不等于用户验收。上线后仍要分别验证 D1 migration、Worker `/healthz`、真实 Tunnel/DNS、外部 HTTPS、桌面领取、ChatGPT OAuth 和第一个真实本地任务。

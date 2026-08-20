@@ -173,6 +173,7 @@ function printApplicationTimeline(application, events) {
 function eventLabel(stage) {
   return ({
     app_opened: "打开客户端",
+    first_launch: "首次启动（安装近似）",
     application_submit_started: "点击申请",
     application_submitted: "申请发送成功",
     application_submit_failed: "申请发送失败",
@@ -184,6 +185,7 @@ function eventLabel(stage) {
     runtime_start_failed: "本地服务启动失败",
     chatgpt_opened: "前往 ChatGPT",
     connection_password_copied: "复制授权密码",
+    first_mcp_use: "首次真实使用（MCP 工具调用）",
   })[stage] || stage;
 }
 

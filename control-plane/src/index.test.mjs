@@ -583,6 +583,50 @@ test("admin reset requires authorization and explicit confirmation, then deletes
   assert.deepEqual(await repeated.json(), { reset: true, deletedDevices: 0 });
 });
 
+test("admin analytics exposes funnel and client failure coverage", async () => {
+  const db = new FakeD1();
+  const env = { DB: db, PILOT_ADMIN_TOKEN: ADMIN_TOKEN };
+  const created = await request("POST", "/applications", {
+    env,
+    body: {
+      applicationToken: "Z".repeat(43),
+      deviceId: `dev_${"a".repeat(24)}`,
+      deviceName: "分析设备",
+      platform: "macos-arm64",
+    },
+  });
+  const application = await created.json();
+  const row = db.applications.get(application.applicationId);
+  row.status = "activated";
+  row.approved_at = row.created_at;
+  row.activated_at = row.created_at;
+  db.events.set(`${application.applicationId}.evt_first`, {
+    application_id: application.applicationId,
+    event_id: "evt_first",
+    stage: "first_mcp_use",
+    outcome: "ok",
+    error_code: null,
+    client_unix_seconds: Math.floor(Date.parse(row.created_at) / 1_000),
+    received_at: row.created_at,
+  });
+  db.events.set(`${application.applicationId}.evt_error`, {
+    application_id: application.applicationId,
+    event_id: "evt_error",
+    stage: "runtime_start_failed",
+    outcome: "error",
+    error_code: "RUNTIME_START_FAILED",
+    client_unix_seconds: Math.floor(Date.parse(row.created_at) / 1_000),
+    received_at: row.created_at,
+  });
+  const unauthorized = await request("GET", "/admin/analytics", { env });
+  assert.equal(unauthorized.status, 401);
+  const response = await request("GET", "/admin/analytics", { env, token: ADMIN_TOKEN });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.funnel.find((step) => step.key === "first_use").count, 1);
+  assert.equal(payload.errors[0].errorCode, "RUNTIME_START_FAILED");
+});
+
 function testKeyPair() {
   const pair = generateKeyPairSync("rsa", { modulusLength: 2048 });
   return {
@@ -677,7 +721,7 @@ class FakeStatement {
       return { results: rows.sort((left, right) => left.created_at.localeCompare(right.created_at) || left.audit_id.localeCompare(right.audit_id)) };
     }
     if (this.sql.includes("FROM pilot_client_events")) {
-      const rows = [...this.db.events.values()].filter((row) => row.application_id === this.values[0]);
+      const rows = [...this.db.events.values()].filter((row) => !this.sql.includes("WHERE application_id") || row.application_id === this.values[0]);
       return { results: rows.sort((left, right) => left.received_at.localeCompare(right.received_at) || left.client_unix_seconds - right.client_unix_seconds) };
     }
     if (this.sql.includes("FROM pilot_applications")) {

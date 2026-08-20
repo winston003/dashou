@@ -15,6 +15,7 @@ import { createPilotAccessGate } from "./dashou-pilot-policy.js";
 import { DashouWorkspaceRegistry } from "./dashou-workspace.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import { McpSessionRegistry } from "./mcp-sessions.js";
+import { recordFirstMcpUse } from "./dashou-pilot-telemetry.js";
 
 const MCP_SESSION_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
 const MCP_SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1_000;
@@ -348,6 +349,7 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
       }
 
       await transport.handleRequest(req, res, req.body);
+      if (req.body?.method === "tools/call") void recordFirstMcpUse(config, { appVersion: VERSION });
     } catch (error) {
       if (!res.headersSent) {
         sendJsonRpcError(res, 500, -32603, error instanceof Error ? error.message : "Internal server error");

@@ -1,4 +1,5 @@
 import { deleteDeviceTunnel, provisionDeviceTunnel } from "./cloudflare.js";
+import { buildAdminAnalytics } from "./analytics.js";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const ACCOUNT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
@@ -14,6 +15,7 @@ const DEVICE_NICKNAME_PATTERN = /^搭手·[\p{L}\p{N}]{1,16}-\d{4}$/u;
 const DEVICE_FINGERPRINT_PATTERN = /^[A-F0-9]{4}-[A-F0-9]{4}$/;
 const CLIENT_EVENT_STAGES = new Set([
   "app_opened",
+  "first_launch",
   "application_submit_started",
   "application_submitted",
   "application_submit_failed",
@@ -35,6 +37,7 @@ const CLIENT_EVENT_STAGES = new Set([
   "notification_enabled",
   "connection_ready",
   "diagnostics_copied",
+  "first_mcp_use",
 ]);
 
 export default {
@@ -83,6 +86,7 @@ async function routeRequest(request, env) {
   }
 
   if (url.pathname === "/admin/applications" && request.method === "GET") return adminApplicationList(request, env, url);
+  if (url.pathname === "/admin/analytics" && request.method === "GET") return adminAnalytics(request, env);
   if (url.pathname === "/admin/reset" && request.method === "POST") return adminReset(request, env);
   const adminApplicationMatch = /^\/admin\/applications\/([^/]+)$/.exec(url.pathname);
   if (adminApplicationMatch && request.method === "GET") {
@@ -308,6 +312,19 @@ async function adminApplicationDetail(request, env, applicationId) {
       createdAt: event.created_at,
     })),
   });
+}
+
+async function adminAnalytics(request, env) {
+  requireAdmin(request, env);
+  const [applicationResult, eventResult] = await Promise.all([
+    env.DB.prepare(
+      "SELECT application_id, status, device_name, nickname, created_at, provisioning_started_at, approved_at, activated_at FROM pilot_applications ORDER BY created_at",
+    ).all(),
+    env.DB.prepare(
+      "SELECT application_id, stage, outcome, error_code, client_unix_seconds, received_at FROM pilot_client_events ORDER BY received_at, client_unix_seconds",
+    ).all(),
+  ]);
+  return json(buildAdminAnalytics(applicationResult.results ?? [], eventResult.results ?? []));
 }
 
 async function adminReset(request, env) {
