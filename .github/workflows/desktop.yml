@@ -361,6 +361,7 @@ jobs:
           DASHOU_WINDOWS_ARCHIVE: release-assets/dashou-${{ steps.release.outputs.version }}-windows-x86_64-setup.exe
           DASHOU_WINDOWS_SIGNATURE: release-assets/dashou-${{ steps.release.outputs.version }}-windows-x86_64-setup.exe.sig
           DASHOU_UPDATER_MANIFEST_PATH: release-assets/latest.json
+          DASHOU_RELEASE_NOTES_PATH: docs/RELEASE_NOTES.md
         run: node desktop/scripts/create-updater-manifest.mjs
       - name: Require matching deployed control plane
         shell: bash

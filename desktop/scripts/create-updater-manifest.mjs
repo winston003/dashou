@@ -6,7 +6,11 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 const version = requiredEnv("DASHOU_RELEASE_VERSION");
 const baseUrl = requiredUrl(requiredEnv("DASHOU_RELEASE_BASE_URL"));
 const outputPath = resolve(process.env.DASHOU_UPDATER_MANIFEST_PATH?.trim() || "latest.json");
-const notes = process.env.DASHOU_RELEASE_NOTES?.trim() || `Dashou desktop ${version}`;
+const notesPath = resolve(requiredEnv("DASHOU_RELEASE_NOTES_PATH"));
+const notes = (await readFile(notesPath, "utf8")).trim();
+if (!notes || !notes.includes(version)) {
+  throw new Error(`Updater notes must be non-empty and mention ${version}: ${notesPath}`);
+}
 const artifacts = [
   ["darwin-aarch64", requiredEnv("DASHOU_MAC_ARM64_ARCHIVE"), requiredEnv("DASHOU_MAC_ARM64_SIGNATURE")],
   ["darwin-x86_64", requiredEnv("DASHOU_MAC_X64_ARCHIVE"), requiredEnv("DASHOU_MAC_X64_SIGNATURE")],
@@ -36,7 +40,7 @@ const manifest = {
   platforms,
 };
 await writeFile(outputPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
-console.log(JSON.stringify({ ok: true, output: outputPath, version, platforms: Object.keys(platforms) }, null, 2));
+console.log(JSON.stringify({ ok: true, output: outputPath, version, notes: notesPath, platforms: Object.keys(platforms) }, null, 2));
 
 function requiredEnv(name) {
   const value = process.env[name]?.trim();
