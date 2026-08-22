@@ -48,7 +48,7 @@
     "pilot:control:setup": "node scripts/setup-pilot-control.mjs",
     "pilot:invite": "node scripts/create-pilot-invite.mjs",
     "deploy:control-plane": "node scripts/deploy-control-plane.mjs",
-    "verify:control-plane": "node --check control-plane/src/index.js && node --check control-plane/src/cloudflare.js && node --test control-plane/src/*.test.mjs scripts/check-control-plane-deploy-compatibility.test.mjs scripts/pilot-admin.test.mjs scripts/pilot-admin-config.test.mjs && npx wrangler deploy --config control-plane/wrangler.jsonc --dry-run",
+    "verify:control-plane": "node --check control-plane/src/index.js && node --check control-plane/src/cloudflare.js && node --test control-plane/src/*.test.mjs scripts/check-control-plane-client-compatibility.test.mjs scripts/check-control-plane-deploy-compatibility.test.mjs scripts/pilot-admin.test.mjs scripts/pilot-admin-config.test.mjs && npx wrangler deploy --config control-plane/wrangler.jsonc --dry-run",
     "prepublishOnly": "npm run verify:release"
   },
   "keywords": [
