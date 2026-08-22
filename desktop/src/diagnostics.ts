@@ -15,7 +15,7 @@ export function troubleshootingNeedsAttention(access: AccessStatus, snapshot: De
   return Boolean(
     snapshot?.error
       || snapshot?.runtimePhase === "blocked"
-      || ["rejected", "expired", "revoked"].includes(access.status),
+      || ["recovery_required", "rejected", "expired", "revoked"].includes(access.status),
   );
 }
 
@@ -24,7 +24,7 @@ export function troubleshootingStep(access: AccessStatus, snapshot: DesktopSnaps
   if (access.status === "not_applied") return "not_applied";
   if (access.status === "pending") return "waiting_confirmation";
   if (access.status === "provisioning") return "preparing_connection";
-  if (access.status === "rejected" || access.status === "expired" || access.status === "revoked") return "needs_attention";
+  if (["recovery_required", "rejected", "expired", "revoked"].includes(access.status)) return "needs_attention";
   if (!snapshot?.configured) return "preparing_connection";
   if (snapshot.runtimePhase === "ready") return "ready";
   if (snapshot.runtimePhase === "recovering") return "recovering_connection";
@@ -64,6 +64,7 @@ export function applicationStatusLabel(status: AccessStatus["status"], copy: Cop
   if (status === "pending") return copy.applicationWaiting;
   if (status === "provisioning") return copy.applicationPreparing;
   if (["approved", "active", "activated"].includes(status)) return copy.applicationReady;
+  if (status === "recovery_required") return copy.applicationRecovery;
   if (status === "rejected") return copy.applicationRejected;
   return copy.applicationEnded;
 }

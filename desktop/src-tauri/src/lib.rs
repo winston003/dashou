@@ -206,9 +206,18 @@ struct StoredApplication {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+struct InstallationIdentity {
+    schema_version: u8,
+    installation_id: String,
+    device_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct DeviceIdentity {
     device_nickname: String,
-    device_fingerprint: String,
+    #[serde(rename = "deviceFingerprint")]
+    support_code: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -360,7 +369,7 @@ fn record_client_event(
             error_code,
             application_id,
             device_nickname: Some(identity.device_nickname),
-            device_fingerprint: Some(identity.device_fingerprint),
+            device_fingerprint: Some(identity.support_code),
         },
     )
 }
@@ -397,11 +406,6 @@ async fn desktop_snapshot(
     desktop_snapshot_for(&app, &state).await
 }
 
-#[tauri::command]
-fn reset_access_state(app: AppHandle, state: State<'_, DaemonState>) -> Result<(), String> {
-    reset_access_state_inner(&app, state.inner())
-}
-
 async fn desktop_snapshot_for(
     app: &AppHandle,
     state: &DaemonState,
@@ -410,6 +414,7 @@ async fn desktop_snapshot_for(
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
+    let _installation = ensure_installation_identity(&data_dir)?;
     let config_path = data_dir.join("config").join("config.json");
     let identity = load_or_create_device_identity(&data_dir)?;
     let config = read_stored_config(&config_path);
@@ -417,13 +422,7 @@ async fn desktop_snapshot_for(
         .as_ref()
         .is_some_and(|value| !value.allowed_roots.is_empty())
         && configuration_is_ready(&config_path, &data_dir.join("config").join("auth.json"));
-    let (
-        phase_hint,
-        recovery_attempts,
-        error,
-        public_health_failures,
-        observed_ready,
-    ) = {
+    let (phase_hint, recovery_attempts, error, public_health_failures, observed_ready) = {
         let guard = state.0.lock().map_err(|_| "后台服务状态锁已损坏")?;
         (
             guard.meta.phase.clone(),
@@ -453,16 +452,15 @@ async fn desktop_snapshot_for(
     } else {
         false
     };
-    let (runtime_phase, next_public_health_failures, next_observed_ready) =
-        resolve_runtime_phase(
-            configured,
-            &phase_hint,
-            running,
-            local_health,
-            public_health,
-            public_health_failures,
-            observed_ready,
-        );
+    let (runtime_phase, next_public_health_failures, next_observed_ready) = resolve_runtime_phase(
+        configured,
+        &phase_hint,
+        running,
+        local_health,
+        public_health,
+        public_health_failures,
+        observed_ready,
+    );
     if let Ok(mut guard) = state.0.lock() {
         guard.meta.public_health_failures = next_public_health_failures;
         guard.meta.observed_ready = next_observed_ready;
@@ -480,7 +478,7 @@ async fn desktop_snapshot_for(
     Ok(DesktopSnapshot {
         version: env!("CARGO_PKG_VERSION").into(),
         device_nickname: identity.device_nickname,
-        device_fingerprint: identity.device_fingerprint,
+        device_fingerprint: identity.support_code,
         platform: platform_name(),
         last_checked_unix_seconds: unix_seconds(),
         configured,
@@ -690,13 +688,15 @@ async fn apply_for_access(app: AppHandle) -> Result<AccessStatus, String> {
     let config_dir = data_dir.join("config");
     fs::create_dir_all(&config_dir).map_err(|error| error.to_string())?;
     let application_path = config_dir.join("application.json");
-    let mut application =
-        read_application(&application_path).unwrap_or_else(|| StoredApplication {
-            control_base_url: control_base_url(),
-            device_id: format!("dev_{}", generate_token()),
-            application_token: generate_token(),
-            application_id: None,
-        });
+    let existing_application = read_application(&application_path)?;
+    let installation =
+        load_or_create_installation_identity(&data_dir, existing_application.as_ref())?;
+    let mut application = existing_application.unwrap_or_else(|| StoredApplication {
+        control_base_url: control_base_url(),
+        device_id: installation.device_id,
+        application_token: generate_token(),
+        application_id: None,
+    });
     // Persist the device credential before the request so a lost response can
     // be retried idempotently without orphaning a server-side application.
     write_json_atomic(&application_path, &application, true)?;
@@ -706,16 +706,31 @@ async fn apply_for_access(app: AppHandle) -> Result<AccessStatus, String> {
         "applicationToken": application.application_token,
         "deviceName": identity.device_nickname,
         "deviceNickname": identity.device_nickname,
-        "deviceFingerprint": identity.device_fingerprint,
+        "deviceFingerprint": identity.support_code,
         "platform": platform_name(),
     });
-    let response: ApplicationApiStatus = control_request(
+    let response: ApplicationApiStatus = match control_request(
         reqwest::Method::POST,
         &format!("{control_base_url}/applications"),
         None,
         Some(request_body),
     )
-    .await?;
+    .await
+    {
+        Ok(response) => response,
+        Err(error) if is_control_http_status(&error, 409) => {
+            return Ok(AccessStatus {
+                status: "recovery_required".into(),
+                application_id: application.application_id,
+                created_at: None,
+                period: None,
+                expires_at: None,
+                mcp_url: None,
+                reason: Some(identity_recovery_reason()),
+            });
+        }
+        Err(error) => return Err(error),
+    };
     application.application_id = Some(response.application_id.clone());
     write_json_atomic(&application_path, &application, true)?;
     let _ = sync_diagnostic_events(&data_dir, &application).await;
@@ -734,7 +749,7 @@ async fn application_status(
         .map_err(|error| error.to_string())?;
     let config_dir = data_dir.join("config");
     let application_path = config_dir.join("application.json");
-    let Some(application) = read_application(&application_path) else {
+    let Some(application) = read_application(&application_path)? else {
         return Ok(AccessStatus {
             status: "not_applied".into(),
             application_id: None,
@@ -759,7 +774,10 @@ async fn application_status(
     .await
     {
         Ok(response) => response,
-        Err(error) if is_stale_application_error(&error) => {
+        Err(error)
+            if stale_application_disposition(&error)
+                == Some(StaleApplicationDisposition::Reset) =>
+        {
             reset_access_state_inner(&app, state.inner())?;
             return Ok(AccessStatus {
                 status: "not_applied".into(),
@@ -769,6 +787,20 @@ async fn application_status(
                 expires_at: None,
                 mcp_url: None,
                 reason: Some("之前的连接已失效，请重新申请".into()),
+            });
+        }
+        Err(error)
+            if stale_application_disposition(&error)
+                == Some(StaleApplicationDisposition::RecoveryRequired) =>
+        {
+            return Ok(AccessStatus {
+                status: "recovery_required".into(),
+                application_id: Some(application_id.into()),
+                created_at: None,
+                period: None,
+                expires_at: None,
+                mcp_url: None,
+                reason: Some(identity_recovery_reason()),
             });
         }
         Err(error) => return Err(error),
@@ -1170,16 +1202,17 @@ fn spawn_supervisor(app: AppHandle) {
                         match child.try_wait() {
                             Ok(None) => {
                                 if !guard.meta.local_health_observed
-                                    && guard
-                                        .meta
-                                        .started_at
-                                        .is_some_and(|started| started.elapsed() >= LOCAL_HEALTH_TIMEOUT)
+                                    && guard.meta.started_at.is_some_and(|started| {
+                                        started.elapsed() >= LOCAL_HEALTH_TIMEOUT
+                                    })
                                 {
                                     health_probe_port = Some(
                                         app.path()
                                             .app_data_dir()
                                             .ok()
-                                            .and_then(|path| read_port(&path.join("config").join("config.json")))
+                                            .and_then(|path| {
+                                                read_port(&path.join("config").join("config.json"))
+                                            })
                                             .unwrap_or(7677),
                                     );
                                 }
@@ -1204,9 +1237,9 @@ fn spawn_supervisor(app: AppHandle) {
             }
         }
         if let Some(port) = health_probe_port {
-            let local_health = tauri::async_runtime::block_on(probe_health(
-                &format!("http://127.0.0.1:{port}/healthz"),
-            ));
+            let local_health = tauri::async_runtime::block_on(probe_health(&format!(
+                "http://127.0.0.1:{port}/healthz"
+            )));
             if let Ok(mut guard) = state.0.lock() {
                 if local_health {
                     guard.meta.local_health_observed = true;
@@ -1623,7 +1656,11 @@ fn resolve_runtime_phase(
         "stopped"
     };
 
-    (phase.into(), next_public_health_failures, next_observed_ready)
+    (
+        phase.into(),
+        next_public_health_failures,
+        next_observed_ready,
+    )
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1934,8 +1971,48 @@ fn read_pilot_public_key(config_dir: &Path) -> Option<String> {
     value.get("pilotPublicKeyPem")?.as_str().map(str::to_string)
 }
 
-fn read_application(path: &Path) -> Option<StoredApplication> {
-    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
+fn read_application(path: &Path) -> Result<Option<StoredApplication>, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "[APPLICATION_RECORD_UNREADABLE] 无法读取本机申请身份：{error}"
+            ))
+        }
+    };
+    let application = serde_json::from_str::<StoredApplication>(&text).map_err(|_| {
+        "[APPLICATION_RECORD_CORRUPT] 本机申请身份已损坏；为避免被识别成新设备，搭手不会自动重建"
+            .to_string()
+    })?;
+    if !valid_stored_application(&application) {
+        return Err(
+            "[APPLICATION_RECORD_CORRUPT] 本机申请身份格式无效；为避免被识别成新设备，搭手不会自动重建"
+                .into(),
+        );
+    }
+    Ok(Some(application))
+}
+
+fn valid_stored_application(application: &StoredApplication) -> bool {
+    !application.control_base_url.trim().is_empty()
+        && application.device_id.starts_with("dev_")
+        && application.device_id.len() >= 20
+        && application
+            .device_id
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || matches!(value, '_' | '-'))
+        && application.application_token.len() >= 43
+        && application
+            .application_token
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || matches!(value, '_' | '-'))
+        && application.application_id.as_ref().is_none_or(|value| {
+            value.starts_with("req_")
+                && value.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+                })
+        })
 }
 
 fn clear_application_record(config_dir: &Path) -> Result<(), String> {
@@ -1946,11 +2023,30 @@ fn clear_application_record(config_dir: &Path) -> Result<(), String> {
     }
 }
 
-fn is_stale_application_error(error: &str) -> bool {
-    matches!(
-        error.split_whitespace().next(),
-        Some("[CONTROL_HTTP_401]") | Some("[CONTROL_HTTP_404]")
-    )
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StaleApplicationDisposition {
+    RecoveryRequired,
+    Reset,
+}
+
+fn stale_application_disposition(error: &str) -> Option<StaleApplicationDisposition> {
+    match error.split_whitespace().next() {
+        Some("[CONTROL_HTTP_401]") => Some(StaleApplicationDisposition::RecoveryRequired),
+        Some("[CONTROL_HTTP_404]") => Some(StaleApplicationDisposition::Reset),
+        _ => None,
+    }
+}
+
+fn is_control_http_status(error: &str, status: u16) -> bool {
+    error
+        .split_whitespace()
+        .next()
+        .is_some_and(|prefix| prefix == format!("[CONTROL_HTTP_{status}]"))
+}
+
+fn identity_recovery_reason() -> String {
+    "这台电脑的身份凭据与服务端不一致。搭手已保留原身份，请复制排查信息并联系客服恢复，不要重复申请。"
+        .into()
 }
 
 fn reset_access_state_inner(app: &AppHandle, state: &DaemonState) -> Result<(), String> {
@@ -2127,10 +2223,14 @@ fn build_diagnostic_report_with_runtime(
 ) -> DiagnosticReport {
     let identity = load_or_create_device_identity(data_dir).unwrap_or_else(|_| DeviceIdentity {
         device_nickname: "搭手·未命名-0000".into(),
-        device_fingerprint: "0000-0000".into(),
+        support_code: "0000-0000".into(),
     });
-    let application = read_application(&data_dir.join("config").join("application.json"));
-    let application_id = application.as_ref().and_then(|value| value.application_id.clone());
+    let application_path = data_dir.join("config").join("application.json");
+    let application_record_present = application_path.exists();
+    let application = read_application(&application_path).ok().flatten();
+    let application_id = application
+        .as_ref()
+        .and_then(|value| value.application_id.clone());
     let path = data_dir.join("logs").join("desktop-events.jsonl");
     let events = fs::read_to_string(path)
         .ok()
@@ -2150,10 +2250,10 @@ fn build_diagnostic_report_with_runtime(
         app_version: env!("CARGO_PKG_VERSION").into(),
         platform: platform_name(),
         device_nickname: identity.device_nickname,
-        device_fingerprint: identity.device_fingerprint,
+        device_fingerprint: identity.support_code,
         last_checked_unix_seconds: unix_seconds(),
         application_id,
-        application_record_present: application.is_some(),
+        application_record_present,
         runtime,
         events,
         privacy: "仅含状态、时间、版本、平台和错误类别；不含密码、Token、目录路径、文件内容或 ChatGPT 对话。",
@@ -2285,8 +2385,7 @@ fn normalize_control_url(value: &str) -> Result<String, String> {
 }
 
 const DEVICE_NICKNAMES: &[&str] = &[
-    "青柠", "云朵", "薄荷", "晚风", "月牙", "海盐", "松果", "晴天", "橘子", "栗子",
-    "星河", "小麦",
+    "青柠", "云朵", "薄荷", "晚风", "月牙", "海盐", "松果", "晴天", "橘子", "栗子", "星河", "小麦",
 ];
 
 const PREPARE_UPDATE_ARG: &str = "--prepare-update";
@@ -2295,17 +2394,132 @@ fn prepare_update_requested(args: &[String]) -> bool {
     args.iter().any(|argument| argument == PREPARE_UPDATE_ARG)
 }
 
-fn load_or_create_device_identity(data_dir: &Path) -> Result<DeviceIdentity, String> {
-    let path = data_dir.join("device.json");
-    if let Ok(text) = fs::read_to_string(&path) {
-        if let Ok(identity) = serde_json::from_str::<DeviceIdentity>(&text) {
-            if valid_device_identity(&identity) {
-                return Ok(identity);
+fn acquire_identity_lock(data_dir: &Path) -> Result<fs::File, String> {
+    fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
+    let path = data_dir.join(".identity.lock");
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|error| format!("[IDENTITY_LOCK_UNAVAILABLE] 无法打开身份锁：{error}"))?;
+    set_private_file(&path)?;
+    file.lock()
+        .map_err(|error| format!("[IDENTITY_LOCK_UNAVAILABLE] 无法锁定本机身份：{error}"))?;
+    Ok(file)
+}
+
+fn load_or_create_installation_identity(
+    data_dir: &Path,
+    existing_application: Option<&StoredApplication>,
+) -> Result<InstallationIdentity, String> {
+    let _lock = acquire_identity_lock(data_dir)?;
+    let path = data_dir.join("installation.json");
+    match fs::read_to_string(&path) {
+        Ok(text) => {
+            let identity = serde_json::from_str::<InstallationIdentity>(&text).map_err(|_| {
+                "[INSTALLATION_IDENTITY_CORRUPT] 本机安装身份已损坏；搭手不会自动生成新设备身份"
+                    .to_string()
+            })?;
+            if !valid_installation_identity(&identity) {
+                return Err(
+                    "[INSTALLATION_IDENTITY_CORRUPT] 本机安装身份格式无效；搭手不会自动生成新设备身份"
+                        .into(),
+                );
             }
+            return Ok(identity);
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "[INSTALLATION_IDENTITY_UNREADABLE] 无法读取本机安装身份：{error}"
+            ))
         }
     }
 
-    fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
+    let installation_id = generate_uuid_v4()?;
+    let device_id = existing_application
+        .map(|application| application.device_id.clone())
+        .unwrap_or_else(|| format!("dev_{}", installation_id.replace('-', "")));
+    let identity = InstallationIdentity {
+        schema_version: 1,
+        installation_id,
+        device_id,
+    };
+    write_json_atomic(&path, &identity, true)?;
+    Ok(identity)
+}
+
+fn ensure_installation_identity(data_dir: &Path) -> Result<InstallationIdentity, String> {
+    let application = read_application(&data_dir.join("config").join("application.json"))?;
+    load_or_create_installation_identity(data_dir, application.as_ref())
+}
+
+fn valid_installation_identity(identity: &InstallationIdentity) -> bool {
+    identity.schema_version == 1
+        && valid_uuid_v4(&identity.installation_id)
+        && identity.device_id.starts_with("dev_")
+        && identity.device_id.len() >= 20
+        && identity
+            .device_id
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || matches!(value, '_' | '-'))
+}
+
+fn generate_uuid_v4() -> Result<String, String> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|error| error.to_string())?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+    ))
+}
+
+fn valid_uuid_v4(value: &str) -> bool {
+    value.len() == 36
+        && value
+            .chars()
+            .enumerate()
+            .all(|(index, character)| match index {
+                8 | 13 | 18 | 23 => character == '-',
+                _ => character.is_ascii_hexdigit(),
+            })
+        && value.as_bytes().get(14) == Some(&b'4')
+        && value
+            .as_bytes()
+            .get(19)
+            .is_some_and(|value| matches!(value.to_ascii_lowercase(), b'8' | b'9' | b'a' | b'b'))
+}
+
+fn load_or_create_device_identity(data_dir: &Path) -> Result<DeviceIdentity, String> {
+    let _lock = acquire_identity_lock(data_dir)?;
+    let path = data_dir.join("device.json");
+    match fs::read_to_string(&path) {
+        Ok(text) => {
+            let identity = serde_json::from_str::<DeviceIdentity>(&text).map_err(|_| {
+                "[SUPPORT_IDENTITY_CORRUPT] 本机设备识别码已损坏；搭手不会静默更换识别码"
+                    .to_string()
+            })?;
+            if !valid_device_identity(&identity) {
+                return Err(
+                    "[SUPPORT_IDENTITY_CORRUPT] 本机设备识别码格式无效；搭手不会静默更换识别码"
+                        .into(),
+                );
+            }
+            return Ok(identity);
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "[SUPPORT_IDENTITY_UNREADABLE] 无法读取本机设备识别码：{error}"
+            ))
+        }
+    }
+
     let mut bytes = [0_u8; 6];
     getrandom::fill(&mut bytes).map_err(|error| error.to_string())?;
     let nickname = format!(
@@ -2315,7 +2529,7 @@ fn load_or_create_device_identity(data_dir: &Path) -> Result<DeviceIdentity, Str
     );
     let identity = DeviceIdentity {
         device_nickname: nickname,
-        device_fingerprint: format!(
+        support_code: format!(
             "{:02X}{:02X}-{:02X}{:02X}",
             bytes[2], bytes[3], bytes[4], bytes[5]
         ),
@@ -2331,14 +2545,13 @@ fn valid_device_identity(identity: &DeviceIdentity) -> bool {
             .device_nickname
             .chars()
             .all(|value| value.is_alphanumeric() || matches!(value, '搭' | '手' | '·' | '-'))
-        && identity.device_fingerprint.len() == 9
+        && identity.support_code.len() == 9
         && identity
-            .device_fingerprint
+            .support_code
             .chars()
             .enumerate()
             .all(|(index, value)| {
-                (index == 4 && value == '-')
-                    || (index != 4 && value.is_ascii_hexdigit())
+                (index == 4 && value == '-') || (index != 4 && value.is_ascii_hexdigit())
             })
 }
 
@@ -2446,13 +2659,49 @@ fn locate_resource_root(resource_dir: &Path) -> PathBuf {
 }
 
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T, secret: bool) -> Result<(), String> {
-    let temp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    let temp = path.with_extension(format!(
+        "json.{}.{}.tmp",
+        std::process::id(),
+        &generate_token()[..12]
+    ));
     let text = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
-    fs::write(&temp, [text.as_slice(), b"\n"].concat()).map_err(|error| error.to_string())?;
-    if secret {
-        set_private_file(&temp)?;
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| error.to_string())?;
+        file.write_all(&text).map_err(|error| error.to_string())?;
+        file.write_all(b"\n").map_err(|error| error.to_string())?;
+        if secret {
+            set_private_file(&temp)?;
+        }
+        file.flush().map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        drop(file);
+        fs::rename(&temp, path).map_err(|error| error.to_string())?;
+        sync_parent_directory(path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
     }
-    fs::rename(temp, path).map_err(|error| error.to_string())
+    result
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "无法同步身份文件目录".to_string())?;
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 const CONNECTION_MILESTONES: &[&str] = &[
@@ -2485,17 +2734,21 @@ fn connection_milestone_time(state_dir: &Path, milestone: &str) -> Option<u64> {
 
 fn legacy_oauth_completed_at(state_dir: &Path) -> Option<u64> {
     let oauth_path = state_dir.join("oauth.json");
-    let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(&oauth_path).ok()?).ok()?;
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&oauth_path).ok()?).ok()?;
     let now = unix_seconds();
     let valid_token = ["accessTokens", "refreshTokens"].iter().any(|key| {
-        value.get(key).and_then(serde_json::Value::as_object).is_some_and(|records| {
-            records.values().any(|record| {
-                record
-                    .get("expiresAt")
-                    .and_then(serde_json::Value::as_u64)
-                    .is_some_and(|expires| expires >= now)
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|records| {
+                records.values().any(|record| {
+                    record
+                        .get("expiresAt")
+                        .and_then(serde_json::Value::as_u64)
+                        .is_some_and(|expires| expires >= now)
+                })
             })
-        })
     });
     valid_token.then(|| {
         fs::metadata(oauth_path)
@@ -2509,7 +2762,8 @@ fn legacy_oauth_completed_at(state_dir: &Path) -> Option<u64> {
 
 fn read_chatgpt_connection_status(state_dir: &Path) -> ChatgptConnectionStatus {
     let setup_opened_at = connection_milestone_time(state_dir, "setup-opened");
-    let authorization_requested_at = connection_milestone_time(state_dir, "authorization-requested");
+    let authorization_requested_at =
+        connection_milestone_time(state_dir, "authorization-requested");
     let oauth_completed_at = connection_milestone_time(state_dir, "oauth-completed")
         .or_else(|| legacy_oauth_completed_at(state_dir));
     let first_session_at = connection_milestone_time(state_dir, "first-mcp-session");
@@ -2721,7 +2975,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             status,
             desktop_snapshot,
-            reset_access_state,
             update_allowed_roots,
             set_preferences,
             restart_runtime,
@@ -2784,7 +3037,9 @@ fn open_chatgpt() -> Result<(), String> {
     #[cfg(windows)]
     let mut command = {
         let mut command = Command::new("rundll32.exe");
-        command.arg("url.dll,FileProtocolHandler").arg(CHATGPT_APPS_URL);
+        command
+            .arg("url.dll,FileProtocolHandler")
+            .arg(CHATGPT_APPS_URL);
         hide_windows_console(&mut command);
         command
     };
@@ -2983,13 +3238,97 @@ mod tests {
         let first = load_or_create_device_identity(&root).expect("create device identity");
         let second = load_or_create_device_identity(&root).expect("read device identity");
         assert_eq!(first.device_nickname, second.device_nickname);
-        assert_eq!(first.device_fingerprint, second.device_fingerprint);
+        assert_eq!(first.support_code, second.support_code);
         assert!(valid_device_identity(&first));
         let json = serde_json::to_string(&first).expect("serialize device identity");
         assert!(!json.contains("token"));
         assert!(!json.contains("password"));
         assert!(!json.contains("/"));
         fs::remove_dir_all(root).expect("remove device identity test directory");
+    }
+
+    #[test]
+    fn concurrent_first_start_creates_one_support_identity() {
+        let root = test_root("device-identity-concurrent");
+        let handles = (0..8)
+            .map(|_| {
+                let root = root.clone();
+                thread::spawn(move || {
+                    load_or_create_device_identity(&root).expect("load concurrent identity")
+                })
+            })
+            .collect::<Vec<_>>();
+        let identities = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("identity thread"))
+            .collect::<Vec<_>>();
+        assert!(identities.iter().all(|identity| {
+            identity.device_nickname == identities[0].device_nickname
+                && identity.support_code == identities[0].support_code
+        }));
+        fs::remove_dir_all(root).expect("remove concurrent identity test directory");
+    }
+
+    #[test]
+    fn corrupt_support_identity_is_not_silently_replaced() {
+        let root = test_root("device-identity-corrupt");
+        fs::create_dir_all(&root).expect("create corrupt identity directory");
+        fs::write(root.join("device.json"), b"not-json").expect("write corrupt identity");
+        let error = load_or_create_device_identity(&root).expect_err("reject corrupt identity");
+        assert!(error.starts_with("[SUPPORT_IDENTITY_CORRUPT]"));
+        assert_eq!(
+            fs::read(root.join("device.json")).expect("read unchanged corrupt identity"),
+            b"not-json"
+        );
+        fs::remove_dir_all(root).expect("remove corrupt identity test directory");
+    }
+
+    #[test]
+    fn installation_identity_survives_application_reset_and_migrates_device_id() {
+        let root = test_root("installation-identity");
+        let config_dir = root.join("config");
+        fs::create_dir_all(&config_dir).expect("create installation config directory");
+        let application = StoredApplication {
+            control_base_url: "https://control.example".into(),
+            device_id: format!("dev_{}", "a".repeat(64)),
+            application_token: "b".repeat(64),
+            application_id: Some("req_existing-device".into()),
+        };
+        write_json_atomic(&config_dir.join("application.json"), &application, true)
+            .expect("write existing application");
+        let first = ensure_installation_identity(&root).expect("migrate installation on startup");
+        clear_application_record(&config_dir).expect("reset application record");
+        let after_reset = ensure_installation_identity(&root)
+            .expect("reload installation identity after application reset");
+        assert_eq!(first.installation_id, after_reset.installation_id);
+        assert_eq!(first.device_id, application.device_id);
+        assert_eq!(after_reset.device_id, application.device_id);
+        assert!(valid_uuid_v4(&first.installation_id));
+        fs::remove_dir_all(root).expect("remove installation identity test directory");
+    }
+
+    #[test]
+    fn corrupt_installation_and_application_records_fail_closed() {
+        let root = test_root("identity-fail-closed");
+        let config = root.join("config");
+        fs::create_dir_all(&config).expect("create identity recovery directory");
+        fs::write(root.join("installation.json"), b"broken-installation")
+            .expect("write corrupt installation identity");
+        let installation_error = load_or_create_installation_identity(&root, None)
+            .expect_err("reject corrupt installation identity");
+        assert!(installation_error.starts_with("[INSTALLATION_IDENTITY_CORRUPT]"));
+
+        let application_path = config.join("application.json");
+        fs::write(&application_path, b"broken-application")
+            .expect("write corrupt application identity");
+        let application_error =
+            read_application(&application_path).expect_err("reject corrupt application identity");
+        assert!(application_error.starts_with("[APPLICATION_RECORD_CORRUPT]"));
+        assert_eq!(
+            fs::read(&application_path).expect("read unchanged application identity"),
+            b"broken-application"
+        );
+        fs::remove_dir_all(root).expect("remove identity recovery test directory");
     }
 
     #[test]
@@ -3346,18 +3685,30 @@ mod tests {
     }
 
     #[test]
-    fn stale_application_errors_are_reset_only_for_unauthorized_or_missing_records() {
-        assert!(is_stale_application_error(
-            "[CONTROL_HTTP_401] 搭手服务返回 401：未授权"
+    fn stale_application_errors_preserve_unauthorized_identity_and_reset_only_missing_records() {
+        assert_eq!(
+            stale_application_disposition("[CONTROL_HTTP_401] 搭手服务返回 401：未授权"),
+            Some(StaleApplicationDisposition::RecoveryRequired)
+        );
+        assert_eq!(
+            stale_application_disposition("[CONTROL_HTTP_404] 搭手服务返回 404：申请不存在"),
+            Some(StaleApplicationDisposition::Reset)
+        );
+        assert_eq!(
+            stale_application_disposition("[CONTROL_TIMEOUT] 联系搭手服务超时，请检查网络后重试"),
+            None
+        );
+        assert_eq!(
+            stale_application_disposition("[CONTROL_HTTP_500] 搭手服务暂时不可用"),
+            None
+        );
+        assert!(is_control_http_status(
+            "[CONTROL_HTTP_409] 搭手服务返回 409：设备已有有效申请",
+            409
         ));
-        assert!(is_stale_application_error(
-            "[CONTROL_HTTP_404] 搭手服务返回 404：申请不存在"
-        ));
-        assert!(!is_stale_application_error(
-            "[CONTROL_TIMEOUT] 联系搭手服务超时，请检查网络后重试"
-        ));
-        assert!(!is_stale_application_error(
-            "[CONTROL_HTTP_500] 搭手服务暂时不可用"
+        assert!(!is_control_http_status(
+            "[CONTROL_HTTP_429] 搭手服务返回 429：请求过多",
+            409
         ));
     }
 
@@ -3464,7 +3815,10 @@ mod tests {
             |_| Ok(()),
             |_| false,
         );
-        assert_eq!(failed_stop.err().as_deref(), Some("owned child would not stop"));
+        assert_eq!(
+            failed_stop.err().as_deref(),
+            Some("owned child would not stop")
+        );
         assert!(!owner_checked.get());
 
         let stale_still_alive = take_over_daemon_with(

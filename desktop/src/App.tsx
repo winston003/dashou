@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "preact/hooks";
 import { defaultCopy, mergeCopy } from "./copy";
 import { setAutostart, tauriBridge, normalizeBridgeError, type Bridge } from "./bridge";
-import { reducer, initialState, phaseLabel, accessIsReady, accessIsWaiting, shouldPollAccess, canCopyPassword } from "./state";
+import { reducer, initialState, phaseLabel, accessIsReady, accessIsWaiting, accessCanApply, shouldPollAccess, canCopyPassword } from "./state";
 import type { AccessStatus, CopyCatalog, DesktopSnapshot, Preferences, RuntimePhase } from "./types";
 import { applicationStatusLabel, troubleshootingNeedsAttention, troubleshootingStatus, troubleshootingStep, troubleshootingStepLabel } from "./diagnostics";
 import { FolderPicker } from "./components/FolderPicker";
@@ -88,6 +88,10 @@ export function App({ bridge = tauriBridge }: Props) {
               void bridge.recordEvent("application_status_failed", "error", "APPLICATION_RESET_REQUIRED");
               void bridge.snapshot().then((refreshed) => dispatch({ type: "snapshot", snapshot: refreshed, syncRoots: true })).catch(() => undefined);
             }
+            if (access.status === "recovery_required") {
+              toast(access.reason ?? copyRef.current.identityRecoveryBody);
+              void bridge.recordEvent("application_status_failed", "error", "APPLICATION_RECOVERY_REQUIRED", access.applicationId);
+            }
             if (["approved", "active", "activated"].includes(access.status) && !activationRecorded.current) {
               activationRecorded.current = true;
               void bridge.recordEvent("activation_completed", "ok", undefined, access.applicationId);
@@ -135,6 +139,7 @@ export function App({ bridge = tauriBridge }: Props) {
 
   const snapshot = state.snapshot;
   const accessReady = accessIsReady(snapshot, state.access);
+  const recoveryRequired = state.access.status === "recovery_required";
   const isWaiting = accessIsWaiting(state.access);
   const runtimePhase = snapshot?.runtimePhase ?? "needs_setup";
   const chatgptPhase = snapshot?.chatgptConnection?.phase ?? "not_started";
@@ -157,8 +162,13 @@ export function App({ bridge = tauriBridge }: Props) {
       const access = await bridge.applyForAccess();
       accessRef.current = access;
       dispatch({ type: "access", access });
-      void bridge.recordEvent("application_submitted", "ok", undefined, access.applicationId);
-      toast(copy.applicationReceived);
+      if (access.status === "recovery_required") {
+        void bridge.recordEvent("application_submit_failed", "error", "APPLICATION_RECOVERY_REQUIRED", access.applicationId);
+        toast(access.reason ?? copy.identityRecoveryBody);
+      } else {
+        void bridge.recordEvent("application_submitted", "ok", undefined, access.applicationId);
+        toast(copy.applicationReceived);
+      }
     } catch (error) {
       const message = friendlyError(error, copy.failureBody, copy);
       dispatch({ type: "error", value: message });
@@ -378,8 +388,9 @@ export function App({ bridge = tauriBridge }: Props) {
                 <h1>{accessReady ? copy.readyTitle : copy.setupTitle}</h1>
                 <p class="lede">{accessReady ? copy.readyBody : copy.setupIntro}</p>
               </div>
-              {!accessReady ? <div class="hero-side"><img class="mascot" src={mascot} alt="" aria-hidden="true" /><button class="button button-primary hero-button" type="button" disabled={state.busy === "access" || isWaiting} onClick={applyAccess}>{state.busy === "access" ? copy.submitting : copy.startSetup}</button></div> : null}
-              {!accessReady && (state.access.reason || state.access.status === "rejected") ? <p class="inline-error">{state.access.reason || copy.failureBody}</p> : null}
+              {!accessReady && accessCanApply(state.access) ? <div class="hero-side"><img class="mascot" src={mascot} alt="" aria-hidden="true" /><button class="button button-primary hero-button" type="button" disabled={state.busy === "access" || isWaiting} onClick={applyAccess}>{state.busy === "access" ? copy.submitting : copy.startSetup}</button></div> : null}
+              {recoveryRequired ? <div class="recover-panel"><strong>{copy.identityRecoveryTitle}</strong><p>{state.access.reason ?? copy.identityRecoveryBody}</p><button class="button button-primary" type="button" onClick={diagnostics}>{copy.copyDiagnostics}</button></div> : null}
+              {!accessReady && !recoveryRequired && (state.access.reason || state.access.status === "rejected") ? <p class="inline-error">{state.access.reason || copy.failureBody}</p> : null}
               <ProgressSteps access={state.access} copy={copy} />
               <TroubleshootingCard snapshot={snapshot} access={state.access} copy={copy} onCopy={diagnostics} />
               {accessReady ? <FolderPicker roots={state.selectedRoots} copy={copy} disabled={state.busy !== null} onAdd={addFolders} onRemove={removeFolder} /> : null}
