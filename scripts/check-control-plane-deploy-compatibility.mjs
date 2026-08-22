@@ -35,15 +35,29 @@ export function assertNoControlPlaneRegression(remote, candidate = {
 }
 
 function readRemoteHealth(url) {
+  const proxyArgs = localProxyAvailable() ? ["--proxy", "http://127.0.0.1:1082"] : [];
   const body = execFileSync("curl", [
     "--fail",
     "--silent",
     "--show-error",
     "--connect-timeout", "15",
     "--max-time", "30",
+    ...proxyArgs,
     url,
   ], { encoding: "utf8", timeout: 35_000 });
   return JSON.parse(body);
+}
+
+function localProxyAvailable() {
+  try {
+    execFileSync("/usr/bin/nc", ["-z", "-w", "1", "127.0.0.1", "1082"], {
+      stdio: "ignore",
+      timeout: 2_000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function main() {
