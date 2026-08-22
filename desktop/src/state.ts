@@ -55,11 +55,16 @@ export function phaseLabel(phase: RuntimePhase): "preparing" | "connecting" | "r
 }
 
 export function accessIsReady(snapshot: DesktopSnapshot | null, access: AccessStatus): boolean {
+  if (access.status === "recovery_required") return false;
   return Boolean(snapshot?.configured || ["approved", "active", "activated"].includes(access.status));
 }
 
 export function accessIsWaiting(access: AccessStatus): boolean {
   return access.status === "pending" || access.status === "provisioning";
+}
+
+export function accessCanApply(access: AccessStatus): boolean {
+  return access.status !== "recovery_required" && !accessIsWaiting(access);
 }
 
 export function shouldPollAccess(access: AccessStatus): boolean {

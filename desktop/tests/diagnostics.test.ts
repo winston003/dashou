@@ -46,6 +46,7 @@ test("diagnostic card uses a friendly platform name without exposing a path", ()
 test("application status stays human-readable", () => {
   assert.equal(applicationStatusLabel("not_applied", defaultCopy), "还没有开始");
   assert.equal(applicationStatusLabel("approved", defaultCopy), "已经准备好");
+  assert.equal(applicationStatusLabel("recovery_required", defaultCopy), "需要恢复身份");
   assert.equal(applicationStatusLabel("revoked", defaultCopy), "已结束");
 });
 
@@ -61,4 +62,5 @@ test("troubleshooting stays folded unless the user needs to act", () => {
   assert.equal(troubleshootingNeedsAttention({ status: "pending" }, snapshot({ configured: false, runtimePhase: "needs_setup" })), false);
   assert.equal(troubleshootingNeedsAttention({ status: "activated" }, snapshot({ runtimePhase: "blocked" })), true);
   assert.equal(troubleshootingNeedsAttention({ status: "rejected" }, snapshot()), true);
+  assert.equal(troubleshootingNeedsAttention({ status: "recovery_required" }, snapshot()), true);
 });

@@ -121,6 +121,18 @@ test("device application can be approved, safely activated, confirmed and revoke
   assert.equal(duplicate.status, 200);
   assert.equal((await duplicate.json()).applicationId, created.applicationId);
 
+  const conflictingCredential = await request("POST", "/applications", {
+    env,
+    body: {
+      applicationToken: "Z".repeat(43),
+      deviceId: `dev_${"b".repeat(24)}`,
+      deviceName: "Alice Mac",
+      platform: "macos-arm64",
+    },
+  });
+  assert.equal(conflictingCredential.status, 409);
+  assert.match((await conflictingCredential.json()).error, /already has an active application/);
+
   const unauthorized = await request("GET", `/applications/${created.applicationId}`, { env });
   assert.equal(unauthorized.status, 401);
   const pending = await request("GET", `/applications/${created.applicationId}`, { env, token: applicationToken });

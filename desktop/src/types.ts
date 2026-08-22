@@ -53,7 +53,7 @@ export type DesktopSnapshot = {
 };
 
 export type AccessStatus = {
-  status: "not_applied" | "pending" | "provisioning" | "approved" | "active" | "activated" | "rejected" | "expired" | "revoked";
+  status: "not_applied" | "pending" | "provisioning" | "approved" | "active" | "activated" | "recovery_required" | "rejected" | "expired" | "revoked";
   applicationId?: string;
   createdAt?: string;
   period?: string;
@@ -164,7 +164,10 @@ export type CopyCatalog = {
   applicationPreparing: string;
   applicationReady: string;
   applicationRejected: string;
+  applicationRecovery: string;
   applicationEnded: string;
+  identityRecoveryTitle: string;
+  identityRecoveryBody: string;
   stepNotApplied: string;
   stepWaitingConfirmation: string;
   stepPreparingConnection: string;

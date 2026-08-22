@@ -220,7 +220,10 @@ export class DashouWorkspaceRegistry {
     const shell = process.platform === "win32" ? "bash" : "/bin/bash";
 
     try {
-      const result = await execFileAsync(shell, ["-lc", command], {
+      // Keep the sanitized daemon environment authoritative. User shell startup
+      // files can replace the pinned Node runtime in PATH, even for commands
+      // launched from a long-lived desktop process.
+      const result = await execFileAsync(shell, ["--noprofile", "--norc", "-c", command], {
         cwd,
         timeout: timeoutSeconds * 1000,
         maxBuffer: MAX_COMMAND_BUFFER,

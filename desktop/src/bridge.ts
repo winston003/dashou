@@ -11,7 +11,6 @@ export const CHATGPT_APPS_URL = "https://chatgpt.com/plugins?view=personal";
 
 export type Bridge = {
   snapshot(): Promise<DesktopSnapshot>;
-  resetAccessState(): Promise<void>;
   copyCatalog(): Promise<Record<string, string>>;
   confirmUiReady(version: string): Promise<void>;
   checkContentUpdates(): Promise<Record<string, string> | void>;
@@ -74,7 +73,6 @@ async function invokeSnapshot(): Promise<DesktopSnapshot> {
 
 export const tauriBridge: Bridge = {
   snapshot: invokeSnapshot,
-  resetAccessState: () => invokeCommand("reset_access_state"),
   copyCatalog: async () => (await invokeCommand<{ messages: Record<string, string> }>("copy_bundle")).messages,
   confirmUiReady: (version) => invokeCommand("ui_ready", { version }),
   checkContentUpdates: async () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { accessIsReady, accessIsWaiting, canCopyPassword, canRemoveRoot, chatgptGuideStep, initialState, phaseLabel, reducer, shouldPollAccess } from "../src/state";
+import { accessCanApply, accessIsReady, accessIsWaiting, canCopyPassword, canRemoveRoot, chatgptGuideStep, initialState, phaseLabel, reducer, shouldPollAccess } from "../src/state";
 import type { DesktopSnapshot } from "../src/types";
 
 test("snapshot hydrates roots and preferences without secrets", () => {
@@ -94,6 +94,9 @@ test("access states distinguish waiting, ready, and rejected flows", () => {
   assert.equal(accessIsReady(null, { status: "active" }), true);
   assert.equal(accessIsReady(null, { status: "pending" }), false);
   assert.equal(accessIsReady({ configured: true } as DesktopSnapshot, { status: "not_applied" }), true);
+  assert.equal(accessIsReady({ configured: true } as DesktopSnapshot, { status: "recovery_required" }), false);
+  assert.equal(accessCanApply({ status: "recovery_required" }), false);
+  assert.equal(accessCanApply({ status: "not_applied" }), true);
 });
 
 test("access polling stops after activation or a terminal result", () => {
@@ -102,6 +105,7 @@ test("access polling stops after activation or a terminal result", () => {
   assert.equal(shouldPollAccess({ status: "provisioning" }), true);
   assert.equal(shouldPollAccess({ status: "approved" }), true);
   assert.equal(shouldPollAccess({ status: "activated" }), false);
+  assert.equal(shouldPollAccess({ status: "recovery_required" }), false);
   assert.equal(shouldPollAccess({ status: "rejected" }), false);
   assert.equal(shouldPollAccess({ status: "expired" }), false);
 });
