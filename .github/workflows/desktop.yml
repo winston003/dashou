@@ -363,13 +363,9 @@ jobs:
           DASHOU_UPDATER_MANIFEST_PATH: release-assets/latest.json
           DASHOU_RELEASE_NOTES_PATH: docs/RELEASE_NOTES.md
         run: node desktop/scripts/create-updater-manifest.mjs
-      - name: Require matching deployed control plane
+      - name: Require compatible deployed control plane
         shell: bash
-        run: |
-          set -euo pipefail
-          expected="${{ steps.release.outputs.version }}"
-          actual="$(curl --fail --silent --show-error https://dashou-pilot-control.whilewon.workers.dev/healthz | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).version||""))')"
-          test "$actual" = "$expected"
+        run: node scripts/check-control-plane-client-compatibility.mjs
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:

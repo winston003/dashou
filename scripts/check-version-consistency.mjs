@@ -11,7 +11,6 @@ const desktopLock = await json("desktop/package-lock.json");
 const rootLock = await json("package-lock.json");
 const tauri = await json("desktop/src-tauri/tauri.conf.json");
 const cargo = await readFile(join(root, "desktop/src-tauri/Cargo.toml"), "utf8");
-const control = await readFile(join(root, "control-plane/src/index.js"), "utf8");
 const releaseNotes = await readFile(join(root, "docs/RELEASE_NOTES.md"), "utf8");
 const expected = process.env.DASHOU_EXPECTED_VERSION?.trim() || rootPackage.version;
 assert.match(expected, /^\d+\.\d+\.\d+-rc\.\d+$/, "release version must use an ordered rc suffix");
@@ -22,7 +21,6 @@ const values = [
   ["desktop lock", desktopLock.version],
   ["tauri config", tauri.version],
   ["cargo manifest", cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1]],
-  ["control plane", control.match(/CONTROL_PLANE_VERSION\s*=\s*"([^"]+)"/)?.[1]],
 ];
 for (const [label, value] of values) assert.equal(value, expected, `${label} version is ${value}, expected ${expected}`);
 assert.equal(releaseNotes.match(/^#\s+([^\s]+)$/m)?.[1], expected, "release notes heading must match the release version");
