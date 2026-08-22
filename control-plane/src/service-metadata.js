@@ -1,4 +1,4 @@
-export const CONTROL_PLANE_SERVICE_VERSION = "1.0.0";
+export const CONTROL_PLANE_SERVICE_VERSION = "1.0.1";
 export const CONTROL_PLANE_API_VERSION = 1;
 export const CONTROL_PLANE_CAPABILITIES = Object.freeze([
   "adminReviewV1",

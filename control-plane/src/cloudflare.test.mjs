@@ -81,6 +81,9 @@ test("Cloudflare deprovisioner deletes only the matching registered DNS record a
   const tunnelId = "259c5a2a-ae41-4bd0-a189-bd84da4065fb";
   globalThis.fetch = async (url, init = {}) => {
     calls.push({ url: String(url), init });
+    if (String(url).endsWith(`/cfd_tunnel/${tunnelId}/connections`) && init.method === "DELETE") {
+      return response({});
+    }
     if (String(url).includes("/dns_records?")) {
       return response([
         { id: "dns-match", name: "device-test.warmbyte.studio", content: `${tunnelId}.cfargotunnel.com` },
@@ -98,7 +101,8 @@ test("Cloudflare deprovisioner deletes only the matching registered DNS record a
     DASHOU_PUBLIC_DOMAIN: "warmbyte.studio",
   }, { tunnelId, hostname: "device-test.warmbyte.studio" });
   assert.equal(result.deletedDnsRecords, 1);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
+  assert.match(calls[0].url, /\/connections$/);
   assert.equal(calls.some((call) => call.url.includes("dns-other")), false);
 });
 

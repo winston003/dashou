@@ -98,6 +98,14 @@ export async function deleteDeviceTunnel(env, device) {
   }
   const headers = { authorization: `Bearer ${apiToken}`, "content-type": "application/json" };
 
+  // A running cloudflared replica makes the tunnel DELETE endpoint return HTTP 400.
+  // Remove every connector first so retirement also works for abandoned devices.
+  await cloudflare(
+    `${API_ROOT}/accounts/${encodeURIComponent(accountId)}/cfd_tunnel/${encodeURIComponent(tunnelId)}/connections`,
+    { method: "DELETE", headers },
+    { notFoundIsSuccess: true },
+  );
+
   const records = await cloudflare(
     `${API_ROOT}/zones/${encodeURIComponent(zoneId)}/dns_records?type=CNAME&name=${encodeURIComponent(hostname)}`,
     { headers },
@@ -120,7 +128,7 @@ export async function deleteDeviceTunnel(env, device) {
     { method: "DELETE", headers },
     { notFoundIsSuccess: true },
   );
-  return { tunnelId, hostname, deletedDnsRecords: matchingRecords.length };
+  return { tunnelId, hostname, deletedDnsRecords: matchingRecords.length, cleanedTunnelConnections: true };
 }
 
 async function cloudflare(url, init, options = {}) {

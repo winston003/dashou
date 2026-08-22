@@ -688,7 +688,7 @@ async function adminRetireApplication(request, env, applicationId) {
         note: "Cloudflare connection retirement requires reconciliation",
       }),
     ]);
-    throw new HttpError(502, "Connection was disabled, but Cloudflare cleanup failed; the customer slot remains blocked until reconciliation succeeds");
+    throw new HttpError(502, "账号已停用，但 Cloudflare 连接清理暂未完成。系统已保留记录，请稍后重试“释放专属连接”");
   }
 }
 

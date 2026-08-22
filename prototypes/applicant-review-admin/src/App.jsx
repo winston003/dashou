@@ -752,13 +752,13 @@ export function App() {
       )}
 
       {modal === "retire" && selected && (
-        <Modal title="释放专属连接" onClose={() => !submitting && setModal(null)}>
-          <div className="live-action-warning"><WarningCircle size={20} weight="fill" /><span>这会禁用账号，并物理删除对应的 Cloudflare Tunnel 和 DNS。审核与历史记录仍会保留，但不能直接恢复。</span></div>
+        <Modal title={selected.resourceState === "delete_failed" ? "重试释放专属连接" : "释放专属连接"} onClose={() => !submitting && setModal(null)}>
+          <div className="live-action-warning"><WarningCircle size={20} weight="fill" /><span>{selected.resourceState === "delete_failed" ? "账号已经停用，但 Cloudflare 仍有连接残留。本次会先断开残留 Connector，再删除 Tunnel 和 DNS；审核历史仍会保留。" : "这会禁用账号，并物理删除对应的 Cloudflare Tunnel 和 DNS。审核与历史记录仍会保留，但不能直接恢复。"}</span></div>
           <label className="reason-label" htmlFor="retire-reason">释放原因</label>
           <textarea id="retire-reason" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="例如：同一客户清理本地后改用新的申请。" maxLength={300} autoFocus />
           <div className="textarea-meta"><span>{reason.length}/300</span></div>
           {actionError && <p className="action-error" role="alert">{actionError}</p>}
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setModal(null)} disabled={submitting}>取消</button><button className="danger-button" type="button" onClick={() => void retireSelected()} disabled={!reason.trim() || submitting}>{submitting ? "正在释放" : "确认删除连接资源"}</button></div>
+          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setModal(null)} disabled={submitting}>取消</button><button className="danger-button" type="button" onClick={() => void retireSelected()} disabled={!reason.trim() || submitting}>{submitting ? "正在释放" : selected.resourceState === "delete_failed" ? "重试清理连接资源" : "确认删除连接资源"}</button></div>
         </Modal>
       )}
 

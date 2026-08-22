@@ -653,7 +653,7 @@ test("Worker health exposes independent service compatibility metadata and build
   assert.deepEqual(await response.json(), {
     ok: true,
     name: "dashou-pilot-control",
-    serviceVersion: "1.0.0",
+    serviceVersion: "1.0.1",
     apiVersion: 1,
     capabilities: [
       "adminReviewV1",
@@ -663,7 +663,7 @@ test("Worker health exposes independent service compatibility metadata and build
       "retirementV1",
       "reversibleReviewV1",
     ],
-    version: "1.0.0",
+    version: "1.0.1",
     buildSha: "abc123",
   });
 });
