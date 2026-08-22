@@ -378,7 +378,7 @@ export function App({ bridge = tauriBridge }: Props) {
       </header>
 
       {state.tab === "settings" ? (
-        <SettingsView copy={copy} snapshot={snapshot} access={state.access} version={snapshot?.version ?? "0.1.3-rc.15"} preferences={state.preferences} busy={state.busy} availableUpdate={state.availableUpdate} onPreference={preference} onCheckUpdate={checkUpdate} onInstallUpdate={installUpdate} onDismissUpdate={() => dispatch({ type: "availableUpdate", value: null })} onCopyDiagnostics={diagnostics} onCopyAddress={copyAddress} onImportInvite={importInvite} onConfigureAgain={() => dispatch({ type: "tab", tab: "use" })} />
+        <SettingsView copy={copy} snapshot={snapshot} access={state.access} version={snapshot?.version ?? "0.1.3-rc.16"} preferences={state.preferences} busy={state.busy} availableUpdate={state.availableUpdate} onPreference={preference} onCheckUpdate={checkUpdate} onInstallUpdate={installUpdate} onDismissUpdate={() => dispatch({ type: "availableUpdate", value: null })} onCopyDiagnostics={diagnostics} onCopyAddress={copyAddress} onImportInvite={importInvite} onConfigureAgain={() => dispatch({ type: "tab", tab: "use" })} />
       ) : (
         <div class="use-page">
           {showSetup ? (
