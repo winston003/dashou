@@ -25,6 +25,10 @@ test("allows only the application review route shapes", () => {
     method: "GET",
     upstreamPath: "/admin/analytics",
   });
+  assert.deepEqual(resolveAdminRoute("GET", "/control-plane"), {
+    method: "GET",
+    upstreamPath: "/healthz",
+  });
   assert.deepEqual(resolveAdminRoute("POST", `/applications/${applicationId}/approve`), {
     method: "POST",
     upstreamPath: `/admin/applications/${applicationId}/approve`,

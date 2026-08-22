@@ -111,4 +111,15 @@ dashou admin applications retire req_xxx --reason '同一客户改用新的申�
 
 诊断分析把 `first_seen` 明确解释为“支持该分析的客户端版本首次被观测到”，不把它当作安装时间。MCP 使用拆成首次连接、首次工具调用尝试、首次工具调用成功和首次工具调用失败（仅记录稳定错误类别）；本地事件先保存为 `pending`，服务端用事件 ID 幂等接收，确认后客户端再标记为 `sent`，重启会重试未确认事件。所有事件只记录状态、时间、版本和错误类别，不记录文件路径、文件内容、密码、Token 或对话内容。客户端事件在获得申请凭据后同步；未提交申请的安装不会出现在管理员统计中。
 
+## 独立版本与发布
+
+控制面、桌面客户端和本地 Admin 面板是三条独立发布线。`GET /healthz` 返回：
+
+- `serviceVersion`：控制面自身版本，不再等于桌面版本；
+- `apiVersion`：客户端可依赖的兼容 API 级别；
+- `capabilities`：Admin 和客户端可按需启用的能力；
+- `buildSha`：本次 Worker 部署对应的 Git 提交。
+
+生产部署只允许从 `codex/control-plane-production` 分支运行 `npm run deploy:control-plane`。部署脚本会先比较线上与候选 `apiVersion/capabilities`；API 降级或丢失线上已有能力时直接拒绝部署。D1 migration 必须保持只增不删和向后兼容。
+
 部署上线不等于用户验收。上线后仍要分别验证 D1 migration、Worker `/healthz`、真实 Tunnel/DNS、外部 HTTPS、桌面领取、ChatGPT OAuth 和第一个真实本地任务。

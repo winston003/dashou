@@ -152,6 +152,10 @@ export function resolveAdminRoute(method = "GET", requestUrl = "/") {
     return { method: "GET", upstreamPath: "/admin/analytics" };
   }
 
+  if (normalizedMethod === "GET" && pathname === "/control-plane" && !url.search) {
+    return { method: "GET", upstreamPath: "/healthz" };
+  }
+
   const detailMatch = /^\/applications\/([^/]+)$/.exec(pathname);
   if (normalizedMethod === "GET" && detailMatch && isApplicationId(detailMatch[1]) && !url.search) {
     return { method: "GET", upstreamPath: `/admin/applications/${encodeURIComponent(detailMatch[1])}` };

@@ -19,6 +19,7 @@ import {
   X,
   XCircle,
 } from "@phosphor-icons/react";
+import { hasControlPlaneCapability, missingCapabilityMessage } from "./control-plane-capabilities.js";
 
 const statusMeta = {
   pending: { label: "待审核", icon: Clock },
@@ -226,7 +227,13 @@ export function App() {
   async function loadAnalytics() {
     setAnalyticsLoading(true);
     setAnalyticsError("");
+    setAnalytics(null);
     try {
+      const controlPlane = await apiRequest("/api/admin/control-plane");
+      if (!hasControlPlaneCapability(controlPlane, "analyticsV1")) {
+        setAnalyticsError(missingCapabilityMessage(controlPlane, "analyticsV1", "申请到首次工具成功分析"));
+        return;
+      }
       setAnalytics(await apiRequest("/api/admin/analytics"));
     } catch (error) {
       setAnalyticsError(error.message);

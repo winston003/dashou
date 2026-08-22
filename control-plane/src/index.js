@@ -1,5 +1,6 @@
 import { deleteDeviceTunnel, provisionDeviceTunnel } from "./cloudflare.js";
 import { buildAdminAnalytics } from "./analytics.js";
+import { controlPlaneHealth } from "./service-metadata.js";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const ACCOUNT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
@@ -7,7 +8,6 @@ const APPLICATION_ID_PATTERN = /^req_[A-Za-z0-9_-]{16,64}$/;
 const DEVICE_ID_PATTERN = /^dev_[A-Za-z0-9_-]{16,96}$/;
 const APPLICATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/;
 const PERIODS = new Set(["week", "month", "quarter", "year"]);
-const CONTROL_PLANE_VERSION = "0.1.3-rc.14";
 const DEFAULT_LEASE_TTL_SECONDS = 15 * 60;
 const RESET_CONFIRMATION = "DELETE_ALL_DASHOU_PILOT_DATA";
 const CLIENT_EVENT_ID_PATTERN = /^evt_[A-Za-z0-9_-]{12,96}$/;
@@ -76,7 +76,7 @@ export async function route(request, env) {
 async function routeRequest(request, env) {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/healthz") {
-    return json({ ok: true, name: "dashou-pilot-control", version: CONTROL_PLANE_VERSION, buildSha: env.DASHOU_BUILD_SHA ?? "dev" });
+    return json(controlPlaneHealth(env.DASHOU_BUILD_SHA ?? "dev"));
   }
   if (request.method === "GET" && url.pathname === "/pilot-policy") return pilotPolicy(request, env);
   if (request.method === "POST" && url.pathname === "/applications") return createApplication(request, env);

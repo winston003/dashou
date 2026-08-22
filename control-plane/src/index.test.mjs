@@ -646,14 +646,24 @@ test("expired accounts receive a signed disabled lease with a valid lease lifeti
   assert.ok(Date.parse(payload.expiresAt) > Date.parse(payload.issuedAt));
 });
 
-test("Worker health exposes the deployment build SHA", async () => {
+test("Worker health exposes independent service compatibility metadata and build SHA", async () => {
   const env = { DB: new FakeD1(), PILOT_ADMIN_TOKEN: ADMIN_TOKEN, DASHOU_BUILD_SHA: "abc123" };
   const response = await request("GET", "/healthz", { env });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     ok: true,
     name: "dashou-pilot-control",
-    version: "0.1.3-rc.14",
+    serviceVersion: "1.0.0",
+    apiVersion: 1,
+    capabilities: [
+      "adminReviewV1",
+      "analyticsV1",
+      "clientEventsV1",
+      "resourceOwnershipV1",
+      "retirementV1",
+      "reversibleReviewV1",
+    ],
+    version: "1.0.0",
     buildSha: "abc123",
   });
 });
