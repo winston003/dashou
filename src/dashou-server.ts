@@ -12,7 +12,12 @@ import * as z from "zod/v4";
 import { DASHOU_V0_TOOLS, dashouCapabilities, dashouVersion } from "./dashou-capabilities.js";
 import { loadDashouConfig, type DashouConfig } from "./dashou-config.js";
 import { createPilotAccessGate } from "./dashou-pilot-policy.js";
-import { DashouWorkspaceRegistry } from "./dashou-workspace.js";
+import {
+  ContextRefreshRequiredError,
+  DashouWorkspaceRegistry,
+  InstructionContextTooLargeError,
+  type DashouContextUpdate,
+} from "./dashou-workspace.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import { McpSessionRegistry } from "./mcp-sessions.js";
 import { markConnectionMilestone } from "./connection-milestones.js";
@@ -32,6 +37,21 @@ export interface RunningDashouServer {
   close(): Promise<void>;
 }
 export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToolSuccess: () => void = () => undefined): McpServer {
+  const instructionSchema = z.object({
+    path: z.string(),
+    scope: z.string(),
+    digest: z.string(),
+    content: z.string(),
+    truncated: z.boolean(),
+  });
+  const contextUpdateSchema = z.object({
+    reason: z.enum(["scope_entered", "instructions_changed", "version_mismatch"]),
+    contextVersion: z.number().int().positive(),
+    scope: z.string(),
+    instructions: z.array(instructionSchema),
+    instructionsDigest: z.string(),
+  });
+  const mutationErrorSchema = z.enum(["context_refresh_required", "instruction_context_too_large"]);
   const server = new McpServer(
     {
       name: "dashou",
@@ -43,8 +63,9 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToo
       instructions: [
         "Dashou works only inside projects explicitly approved by the user.",
         "If the user has not supplied a project path, call list_projects before open_project.",
-        "Call open_project once per project, follow its loaded project instructions, then reuse workspaceId for read, write, edit and execute.",
-        "Before changing files under a directory with an available nested AGENTS.md or CLAUDE.md, read that instruction file first.",
+        "Call open_project once per independent conversation or logical task, follow its loaded project instructions, then reuse that workspaceId and the latest contextVersion for read, write, edit and execute.",
+        "read may return a contextUpdate when entering a nested instruction scope. Follow it and use its contextVersion for later changes.",
+        "If a change returns context_refresh_required, follow contextUpdate and retry once with its current contextVersion.",
         "Project instruction files guide the model but never expand approved roots or bypass tool safety checks.",
         "Use edit/write for text changes; do not modify files through execute.",
         "execute is not an OS sandbox and runs with the local user's authority, so use it only for the requested project work.",
@@ -84,16 +105,17 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToo
     "open_project",
     {
       title: "打开项目",
-      description: "打开一个用户已经授权的本地项目目录，并返回该项目的 AGENTS.md/CLAUDE.md 规则。每个项目只需调用一次，之后复用返回的 workspaceId。",
+      description: "为当前独立对话或逻辑任务打开一个已授权项目，返回新的 workspaceId 及 AGENTS.md/CLAUDE.md 规则。之后在该任务内复用此 workspaceId。",
       inputSchema: {
         path: z.string().describe("用户授权范围内的本地项目绝对路径或 ~/ 开头的路径。"),
       },
       outputSchema: {
         workspaceId: z.string(),
         root: z.string(),
-        instructions: z.array(z.object({ path: z.string(), content: z.string() })),
+        instructions: z.array(instructionSchema),
         availableInstructionFiles: z.array(z.string()),
         instructionsDigest: z.string(),
+        contextVersion: z.number().int().positive(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -121,6 +143,7 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToo
           instructions: workspace.instructions,
           availableInstructionFiles: workspace.availableInstructionFiles,
           instructionsDigest: workspace.instructionsDigest,
+          contextVersion: workspace.contextVersion,
         },
       };
     },
@@ -137,15 +160,24 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToo
         offset: z.number().int().positive().optional().describe("从第几行开始，1 起始。"),
         limit: z.number().int().positive().max(20_000).optional().describe("最多返回多少行。"),
       },
-      outputSchema: { result: z.string() },
+      outputSchema: {
+        result: z.string(),
+        contextVersion: z.number().int().positive(),
+        contextUpdate: contextUpdateSchema.optional(),
+      },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ workspaceId, path, offset, limit }) => {
-      const result = await workspaces.readText(workspaceId, path, offset, limit);
+      const read = await workspaces.readText(workspaceId, path, offset, limit);
       onToolSuccess();
       return {
-        content: [{ type: "text", text: result }],
-        structuredContent: { result },
+        content: [{
+          type: "text",
+          text: read.contextUpdate
+            ? `${formatContextUpdate(read.contextUpdate)}\n\n${read.result}`
+            : read.result,
+        }],
+        structuredContent: { ...read },
       };
     },
   );
@@ -157,10 +189,16 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToo
       description: "在已打开项目中创建或完整覆盖一个文本文件。局部修改优先使用 edit。",
       inputSchema: {
         workspaceId: z.string(),
+        contextVersion: z.number().int().positive().describe("open_project 或最近一次工具结果返回的 contextVersion。"),
         path: z.string().describe("项目根目录内的相对文件路径。"),
         content: z.string().describe("文件的完整文本内容。"),
       },
-      outputSchema: { result: z.string() },
+      outputSchema: {
+        result: z.string().optional(),
+        contextVersion: z.number().int().positive(),
+        contextUpdate: contextUpdateSchema.optional(),
+        error: mutationErrorSchema.optional(),
+      },
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -168,14 +206,20 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToo
         openWorldHint: false,
       },
     },
-    async ({ workspaceId, path, content }) => {
-      const byteLength = await workspaces.writeText(workspaceId, path, content);
-      const result = `Wrote ${path} (${byteLength} bytes).`;
-      onToolSuccess();
-      return {
-        content: [{ type: "text", text: result }],
-        structuredContent: { result },
-      };
+    async ({ workspaceId, contextVersion, path, content }) => {
+      try {
+        const written = await workspaces.writeText(workspaceId, path, content, contextVersion);
+        const result = `Wrote ${path} (${written.byteLength} bytes).`;
+        onToolSuccess();
+        return {
+          content: [{ type: "text", text: result }],
+          structuredContent: { result, contextVersion: written.contextVersion },
+        };
+      } catch (error) {
+        if (error instanceof ContextRefreshRequiredError) return contextRefreshResult(error);
+        if (error instanceof InstructionContextTooLargeError) return instructionContextTooLargeResult(error);
+        throw error;
+      }
     },
   );
 
@@ -186,10 +230,16 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToo
       description: "通过唯一精确文本替换修改项目中的一个文本文件。每个 oldText 必须只出现一次。",
       inputSchema: {
         workspaceId: z.string(),
+        contextVersion: z.number().int().positive().describe("open_project 或最近一次工具结果返回的 contextVersion。"),
         path: z.string().describe("项目根目录内的相对文件路径。"),
         edits: z.array(z.object({ oldText: z.string().min(1), newText: z.string() })).min(1).max(100),
       },
-      outputSchema: { result: z.string() },
+      outputSchema: {
+        result: z.string().optional(),
+        contextVersion: z.number().int().positive(),
+        contextUpdate: contextUpdateSchema.optional(),
+        error: mutationErrorSchema.optional(),
+      },
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -197,14 +247,20 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToo
         openWorldHint: false,
       },
     },
-    async ({ workspaceId, path, edits }) => {
-      await workspaces.editText(workspaceId, path, edits);
-      const result = `Edited ${path} (${edits.length} replacement${edits.length === 1 ? "" : "s"}).`;
-      onToolSuccess();
-      return {
-        content: [{ type: "text", text: result }],
-        structuredContent: { result },
-      };
+    async ({ workspaceId, contextVersion, path, edits }) => {
+      try {
+        const edited = await workspaces.editText(workspaceId, path, edits, contextVersion);
+        const result = `Edited ${path} (${edits.length} replacement${edits.length === 1 ? "" : "s"}).`;
+        onToolSuccess();
+        return {
+          content: [{ type: "text", text: result }],
+          structuredContent: { result, contextVersion: edited.contextVersion },
+        };
+      } catch (error) {
+        if (error instanceof ContextRefreshRequiredError) return contextRefreshResult(error);
+        if (error instanceof InstructionContextTooLargeError) return instructionContextTooLargeResult(error);
+        throw error;
+      }
     },
   );
 
@@ -215,19 +271,24 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToo
       description: [
         "在已打开项目中执行命令，用于测试、构建、Git 检查、搜索和目录查看。",
         "不要通过 execute 修改项目文件；文件变更使用 write/edit。",
-        "只有用户在搭手设置中主动开启项目命令后才能使用。execute 不是操作系统沙箱，会使用本地用户权限，但不会继承搭手服务或云端凭据。",
+        "规则作用域只由 workingDirectory 决定；执行嵌套目录任务时应显式设置该目录。",
+        "只有用户在搭手设置中主动开启项目命令后才能使用。execute 不是操作系统沙箱，会使用本地用户权限，但不会通过进程环境继承搭手服务或云端凭据，也不会加载 Bash profile。",
       ].join(" "),
       inputSchema: {
         workspaceId: z.string(),
+        contextVersion: z.number().int().positive().describe("open_project 或最近一次工具结果返回的 contextVersion。"),
         command: z.string().min(1),
         workingDirectory: z.string().optional().describe("项目内相对目录，默认项目根目录。"),
         timeoutSeconds: z.number().int().positive().max(300).optional().describe("默认 30 秒，最大 300 秒。"),
       },
       outputSchema: {
-        stdout: z.string(),
-        stderr: z.string(),
-        exitCode: z.number().int(),
-        truncated: z.boolean(),
+        stdout: z.string().optional(),
+        stderr: z.string().optional(),
+        exitCode: z.number().int().optional(),
+        truncated: z.boolean().optional(),
+        contextVersion: z.number().int().positive(),
+        contextUpdate: contextUpdateSchema.optional(),
+        error: mutationErrorSchema.optional(),
       },
       annotations: {
         readOnlyHint: false,
@@ -236,24 +297,25 @@ export function createDashouMcpServer(workspaces: DashouWorkspaceRegistry, onToo
         openWorldHint: true,
       },
     },
-    async ({ workspaceId, command, workingDirectory, timeoutSeconds }) => {
-      const result = await workspaces.execute(workspaceId, command, workingDirectory, timeoutSeconds);
-      const text = [
-        `exitCode: ${result.exitCode}`,
-        result.stdout ? `stdout:\n${result.stdout}` : undefined,
-        result.stderr ? `stderr:\n${result.stderr}` : undefined,
-        result.truncated ? "output truncated" : undefined,
-      ].filter(Boolean).join("\n");
-      onToolSuccess();
-      return {
-        content: [{ type: "text", text }],
-        structuredContent: {
-          stdout: result.stdout,
-          stderr: result.stderr,
-          exitCode: result.exitCode,
-          truncated: result.truncated,
-        },
-      };
+    async ({ workspaceId, contextVersion, command, workingDirectory, timeoutSeconds }) => {
+      try {
+        const result = await workspaces.execute(workspaceId, command, workingDirectory, timeoutSeconds, contextVersion);
+        const text = [
+          `exitCode: ${result.exitCode}`,
+          result.stdout ? `stdout:\n${result.stdout}` : undefined,
+          result.stderr ? `stderr:\n${result.stderr}` : undefined,
+          result.truncated ? "output truncated" : undefined,
+        ].filter(Boolean).join("\n");
+        onToolSuccess();
+        return {
+          content: [{ type: "text", text }],
+          structuredContent: { ...result },
+        };
+      } catch (error) {
+        if (error instanceof ContextRefreshRequiredError) return contextRefreshResult(error);
+        if (error instanceof InstructionContextTooLargeError) return instructionContextTooLargeResult(error);
+        throw error;
+      }
     },
   );
 
@@ -280,7 +342,11 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
     requiredScopes: [config.oauth.scopes[0] ?? "dashou"],
     resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceServerUrl),
   });
-  const workspaces = new DashouWorkspaceRegistry(config.allowedRoots);
+  // ChatGPT may initialize more than one Streamable HTTP session while carrying
+  // one logical tool chain. Keep project handles at the Runtime level so a
+  // workspaceId returned by open_project remains valid for the following tool
+  // call even when the client routes it through another MCP session.
+  const workspaces = new DashouWorkspaceRegistry(config.allowedRoots, { stateDir: config.stateDir });
   const transports = new McpSessionRegistry<Transport>();
 
   app.use(
@@ -390,6 +456,7 @@ export function createDashouServer(config = loadDashouConfig()): RunningDashouSe
         clearInterval(cleanupTimer);
         pilotGate.stop();
         await transports.closeAll();
+        await workspaces.closeAll();
         oauthProvider.close();
       })();
       return closePromise;
@@ -449,4 +516,44 @@ function sendJsonRpcError(
     id: null,
     error: { code, message },
   });
+}
+
+function formatContextUpdate(update: DashouContextUpdate): string {
+  const instructions = update.instructions.length > 0
+    ? update.instructions.map((instruction) => `\n--- ${instruction.path} ---\n${instruction.content}`).join("\n")
+    : "\nNo project instruction file applies to this scope.";
+  return [
+    `Project context updated (${update.reason}). Current contextVersion: ${update.contextVersion}.`,
+    `Scope: ${update.scope}. Instructions digest: ${update.instructionsDigest}.`,
+    "Follow these instructions before continuing:",
+    instructions,
+  ].join("\n");
+}
+
+function contextRefreshResult(error: ContextRefreshRequiredError) {
+  return {
+    isError: true,
+    content: [{ type: "text" as const, text: `${error.message}\n${formatContextUpdate(error.contextUpdate)}` }],
+    structuredContent: {
+      error: error.code,
+      contextVersion: error.contextUpdate.contextVersion,
+      contextUpdate: error.contextUpdate,
+    },
+  };
+}
+
+function instructionContextTooLargeResult(error: InstructionContextTooLargeError) {
+  const update = error.contextUpdate;
+  return {
+    isError: true,
+    content: [{
+      type: "text" as const,
+      text: update ? `${error.message}\n${formatContextUpdate(update)}` : error.message,
+    }],
+    structuredContent: {
+      error: error.code,
+      contextVersion: error.contextVersion,
+      ...(update ? { contextUpdate: update } : {}),
+    },
+  };
 }

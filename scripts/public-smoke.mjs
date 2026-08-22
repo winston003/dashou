@@ -68,7 +68,9 @@ try {
     arguments: { path: project },
   });
   const workspaceId = opened.result?.structuredContent?.workspaceId;
+  const contextVersion = opened.result?.structuredContent?.contextVersion;
   assert(typeof workspaceId === "string", "public open_project did not return workspaceId");
+  assert(Number.isInteger(contextVersion), "public open_project did not return contextVersion");
 
   const before = await mcpCall(publicUrl, accessToken, sessionId, "tools/call", {
     name: "read",
@@ -78,15 +80,15 @@ try {
 
   await mcpCall(publicUrl, accessToken, sessionId, "tools/call", {
     name: "write",
-    arguments: { workspaceId, path: "created.txt", content: "created public smoke\n" },
+    arguments: { workspaceId, contextVersion, path: "created.txt", content: "created public smoke\n" },
   });
   await mcpCall(publicUrl, accessToken, sessionId, "tools/call", {
     name: "edit",
-    arguments: { workspaceId, path: "notes.txt", edits: [{ oldText: "before public smoke", newText: "after public smoke" }] },
+    arguments: { workspaceId, contextVersion, path: "notes.txt", edits: [{ oldText: "before public smoke", newText: "after public smoke" }] },
   });
   const executed = await mcpCall(publicUrl, accessToken, sessionId, "tools/call", {
     name: "execute",
-    arguments: { workspaceId, command: "printf public-executed" },
+    arguments: { workspaceId, contextVersion, command: "printf public-executed" },
   });
   assert(executed.result?.structuredContent?.stdout === "public-executed", "public execute did not return expected stdout");
   assert(await readFile(join(project, "notes.txt"), "utf8") === "after public smoke\n", "public edit did not change the local file");

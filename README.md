@@ -45,15 +45,19 @@ ChatGPT 只看到 6 个工具：
 - `execute`：在项目目录内执行命令、测试、构建、Git 检查和搜索。
 
 V0 默认不开放 Task、多 Agent、Review、Lease、Worktree、Skills、Cloud Workspace 或长期 Memory。
-项目根目录的 `AGENTS.md` / `CLAUDE.md` 规则会在 `open_project` 时加载；嵌套规则会被发现并要求模型在进入对应目录前读取。
+`open_project` 会优先加载项目根目录的 `AGENTS.override.md`、`AGENTS.md`，没有 AGENTS 规则时才回退到 `CLAUDE.md`。每次调用都会为当前独立对话或逻辑任务创建新的 `workspaceId` 和规则确认状态；同一任务后续即使切换底层 MCP transport，也继续复用这个 `workspaceId`。进入嵌套目录后，`read` 会按“项目根 → 当前目录”返回适用规则和新的 `contextVersion`；`write`、`edit`、`execute` 必须携带最新版本。规则新增或变化时，搭手先返回 `context_refresh_required` 且不执行修改，模型读取新规则后再重试。若任何适用规则因 32 KiB 总预算被截断，搭手返回 `instruction_context_too_large` 并拒绝 `write`、`edit`、`execute`，直到规则文件被缩减。
+
+这是一层最小 Harness：ChatGPT 仍负责对话、推理和工具循环；搭手只负责工作区状态、规则解析、上下文版本、权限门和事件记录。工具仍然只有上述 6 个，不引入 Task、Subagent 或新的 Agent Runtime。
 
 ## 安全边界
 
 - 只能打开初始化时明确授权的目录。
 - 文件路径必须保持在授权根目录内。
 - 模型侧要求文件修改通过 `write` / `edit`，命令通过 `execute` 明确发生；这样变更边界更清楚。
-- `execute` 默认关闭。用户在客户端设置中主动开启后，它拥有本地用户的命令执行权限，运行的程序本身仍可能访问授权目录之外的内容。它**不是操作系统沙箱**；搭手会剥离服务端、云端和常见开发凭据，并额外拦截少数明显危险命令。
+- `execute` 默认关闭。用户在客户端设置中主动开启后，它拥有本地用户的命令执行权限，运行的程序本身仍可能访问授权目录之外的内容。它**不是操作系统沙箱**；搭手不会通过进程环境传入服务端、云端和常见开发凭据，Bash 也不会加载用户 profile，并额外拦截少数明显危险命令。但命令仍可主动读取本地用户本来就能访问的文件。
+- `execute` 的规则作用域只由 `workingDirectory` 决定，不会尝试静态解析任意 shell 命令最终会接触的所有路径。处理嵌套目录时，模型必须显式把 `workingDirectory` 设置到该目录；需要逐路径强制治理时，应改用 typed command 或真正的 OS sandbox，而不是依赖 shell 字符串分析。
 - 文件工具会同时检查授权根目录、项目边界和符号链接逃逸；`write` / `edit` 使用同目录原子替换。
+- 搭手在本地状态目录的 `harness/events.jsonl` 记录工作区打开、上下文交付以及工具允许/拒绝/完成事件。日志只保存操作类型、目标路径和参数摘要，不保存文件正文、命令正文、Token 或环境变量。
 - OAuth 客户端和 Token 使用轻量 JSON 状态持久化，不再依赖 SQLite。
 - 搭手的配置和授权信息与 DevSpace 隔离，默认写入 `~/.dashou`；运行状态默认写入 `~/.local/share/dashou`。
 

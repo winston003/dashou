@@ -61,12 +61,14 @@ try {
 
   const opened = await mcpCall(client.baseUrl, client.accessToken, session.id, "tools/call", { name: "open_project", arguments: { path: project } });
   const workspaceId = opened.result?.structuredContent?.workspaceId;
+  const contextVersion = opened.result?.structuredContent?.contextVersion;
   assert(typeof workspaceId === "string", "open_project did not return workspaceId");
+  assert(Number.isInteger(contextVersion), "open_project did not return contextVersion");
   const readBefore = await mcpCall(client.baseUrl, client.accessToken, session.id, "tools/call", { name: "read", arguments: { workspaceId, path: "notes.txt" } });
   assert(readBefore.result?.structuredContent?.result === "before\n", "read did not return the local file");
-  await mcpCall(client.baseUrl, client.accessToken, session.id, "tools/call", { name: "write", arguments: { workspaceId, path: "created.txt", content: "created by ChatGPT-compatible pilot\n" } });
-  await mcpCall(client.baseUrl, client.accessToken, session.id, "tools/call", { name: "edit", arguments: { workspaceId, path: "notes.txt", edits: [{ oldText: "before", newText: "after" }] } });
-  const executed = await mcpCall(client.baseUrl, client.accessToken, session.id, "tools/call", { name: "execute", arguments: { workspaceId, command: "printf executed-by-chatgpt-compatible-client" } });
+  await mcpCall(client.baseUrl, client.accessToken, session.id, "tools/call", { name: "write", arguments: { workspaceId, contextVersion, path: "created.txt", content: "created by ChatGPT-compatible pilot\n" } });
+  await mcpCall(client.baseUrl, client.accessToken, session.id, "tools/call", { name: "edit", arguments: { workspaceId, contextVersion, path: "notes.txt", edits: [{ oldText: "before", newText: "after" }] } });
+  const executed = await mcpCall(client.baseUrl, client.accessToken, session.id, "tools/call", { name: "execute", arguments: { workspaceId, contextVersion, command: "printf executed-by-chatgpt-compatible-client" } });
   assert(executed.result?.structuredContent?.stdout === "executed-by-chatgpt-compatible-client", "execute failed");
   nodeAssert.equal(await readFile(join(project, "notes.txt"), "utf8"), "after\n");
   nodeAssert.equal(await readFile(join(project, "created.txt"), "utf8"), "created by ChatGPT-compatible pilot\n");

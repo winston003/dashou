@@ -31,20 +31,23 @@ test("MCP flow discovers a project, loads its instructions, and edits it", async
   });
   const openedContent = structured(opened);
   const workspaceId = openedContent.workspaceId as string;
-  assert.deepEqual(openedContent.instructions, [{
-    path: "AGENTS.md",
-    content: "Use the project test command before reporting success.\n",
-  }]);
+  const contextVersion = openedContent.contextVersion as number;
+  assert.equal(contextVersion, 1);
+  assert.deepEqual(
+    (openedContent.instructions as Array<{ path: string; content: string }>).map(({ path, content }) => ({ path, content })),
+    [{ path: "AGENTS.md", content: "Use the project test command before reporting success.\n" }],
+  );
   assert.deepEqual(openedContent.availableInstructionFiles, ["src/CLAUDE.md"]);
 
   await context.client.callTool({
     name: "write",
-    arguments: { workspaceId, path: "notes.txt", content: "hello\n" },
+    arguments: { workspaceId, contextVersion, path: "notes.txt", content: "hello\n" },
   });
   await context.client.callTool({
     name: "edit",
     arguments: {
       workspaceId,
+      contextVersion,
       path: "notes.txt",
       edits: [{ oldText: "hello", newText: "hello dashou" }],
     },
@@ -58,10 +61,75 @@ test("MCP flow discovers a project, loads its instructions, and edits it", async
 
   const execute = await context.client.callTool({
     name: "execute",
-    arguments: { workspaceId, command: "printf ok" },
+    arguments: { workspaceId, contextVersion, command: "printf ok" },
   });
   assert.equal(structured(execute).exitCode, 0);
   assert.match(text(execute), /ok/);
+});
+
+test("MCP context guard delivers nested rules and rejects missing or stale mutation versions", async (t) => {
+  const context = await fixture(t);
+  const opened = await context.client.callTool({ name: "open_project", arguments: { path: context.project } });
+  const workspaceId = structured(opened).workspaceId as string;
+  const initialVersion = structured(opened).contextVersion as number;
+
+  const missing = await context.client.callTool({
+    name: "write",
+    arguments: { workspaceId, path: "missing.txt", content: "must not write\n" },
+  });
+  assert.equal(missing.isError, true);
+  await assert.rejects(() => readFile(join(context.project, "missing.txt")), /ENOENT/);
+
+  const nestedRead = await context.client.callTool({
+    name: "read",
+    arguments: { workspaceId, path: "src/existing.ts" },
+  });
+  const nested = structured(nestedRead);
+  assert.equal(nested.contextVersion, initialVersion + 1);
+  assert.equal((nested.contextUpdate as { reason: string }).reason, "scope_entered");
+
+  const stale = await context.client.callTool({
+    name: "write",
+    arguments: { workspaceId, contextVersion: initialVersion, path: "stale.txt", content: "must not write\n" },
+  });
+  assert.equal(stale.isError, true);
+  assert.equal(structured(stale).error, "context_refresh_required");
+  assert.equal(structured(stale).contextVersion, initialVersion + 1);
+  await assert.rejects(() => readFile(join(context.project, "stale.txt")), /ENOENT/);
+
+  const fresh = await context.client.callTool({
+    name: "write",
+    arguments: {
+      workspaceId,
+      contextVersion: structured(stale).contextVersion,
+      path: "fresh.txt",
+      content: "written\n",
+    },
+  });
+  assert.equal(fresh.isError, undefined);
+  assert.equal(await readFile(join(context.project, "fresh.txt"), "utf8"), "written\n");
+});
+
+test("MCP mutations return a structured error when project instructions are truncated", async (t) => {
+  const context = await fixture(t);
+  await writeFile(join(context.project, "AGENTS.md"), "r".repeat(40 * 1024));
+  const opened = await context.client.callTool({ name: "open_project", arguments: { path: context.project } });
+  const openedContent = structured(opened);
+  assert.equal((openedContent.instructions as Array<{ truncated: boolean }>)[0]?.truncated, true);
+
+  const write = await context.client.callTool({
+    name: "write",
+    arguments: {
+      workspaceId: openedContent.workspaceId,
+      contextVersion: openedContent.contextVersion,
+      path: "blocked.txt",
+      content: "must not write\n",
+    },
+  });
+  assert.equal(write.isError, true);
+  assert.equal(structured(write).error, "instruction_context_too_large");
+  assert.equal(structured(write).contextVersion, 1);
+  await assert.rejects(() => readFile(join(context.project, "blocked.txt")), /ENOENT/);
 });
 
 interface Fixture {
@@ -75,6 +143,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
   await writeFile(join(project, "README.md"), "dashou\n");
   await writeFile(join(project, "AGENTS.md"), "Use the project test command before reporting success.\n");
   await writeFile(join(project, "src", "CLAUDE.md"), "Keep source files focused.\n");
+  await writeFile(join(project, "src", "existing.ts"), "export {};\n");
 
   const server = createDashouMcpServer(new DashouWorkspaceRegistry(
     [project],

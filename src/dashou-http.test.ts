@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -100,6 +100,7 @@ test("OAuth + Streamable HTTP works end to end like a remote MCP host", async (t
   const root = await mkdtemp(join(tmpdir(), "dashou-http-e2e-"));
   const project = join(root, "project");
   await mkdir(project);
+  await writeFile(join(project, "request.txt"), "cross-session\n");
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const config: DashouConfig = {
@@ -256,6 +257,44 @@ test("OAuth + Streamable HTTP works end to end like a remote MCP host", async (t
   const workspaceId = (openedPayload.result as { structuredContent?: { workspaceId?: string } })?.structuredContent?.workspaceId;
   assert.ok(workspaceId);
   assert.match(await readFile(join(root, ".state", "connection-first-tool-success"), "utf8"), /^\d+\n$/);
+
+  // ChatGPT can create a fresh MCP session between consecutive tool calls.
+  // A Runtime-scoped workspace handle must still be valid in that session.
+  const secondInitialize = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: commonHeaders,
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "chatgpt-e2e-second-session", version: "1.0.0" },
+      },
+    }),
+  });
+  assert.equal(secondInitialize.status, 200);
+  const secondSessionId = secondInitialize.headers.get("mcp-session-id");
+  assert.ok(secondSessionId);
+  await secondInitialize.text();
+
+  const crossSessionRead = await fetch(`${baseUrl}/mcp`, {
+    method: "POST",
+    headers: { ...commonHeaders, "mcp-session-id": secondSessionId },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 5,
+      method: "tools/call",
+      params: { name: "read", arguments: { workspaceId, path: "request.txt" } },
+    }),
+  });
+  assert.equal(crossSessionRead.status, 200);
+  const crossSessionPayload = await rpcPayload(crossSessionRead);
+  assert.equal(
+    (crossSessionPayload.result as { structuredContent?: { result?: string } })?.structuredContent?.result,
+    "cross-session\n",
+  );
 
 });
 
